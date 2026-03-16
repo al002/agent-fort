@@ -40,7 +40,6 @@ pub fn run(args: StartArgs) -> Result<StartOutput> {
 
     ensure_file(&state.daemon_path, "daemon binary")?;
     ensure_file(&state.bwrap_path, "bwrap binary")?;
-    ensure_file(&state.helper_path, "helper binary")?;
 
     if let Ok(response) = ping_once(&endpoint) {
         return Ok(StartOutput {

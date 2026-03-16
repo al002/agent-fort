@@ -36,6 +36,10 @@ name = "af-core"
 version = "0.1.0"
 
 [[package]]
+name = "af-helper"
+version = "0.1.0"
+
+[[package]]
 name = "af-policy"
 version = "0.1.0"
 
@@ -1644,8 +1648,11 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "flate2",
  "serde",
  "serde_json",
+ "sha2",
+ "tar",
 ]
 
 [[package]]

@@ -29,6 +29,7 @@ struct BundleSpec {
     format: String,
     daemon_rel_path: String,
     bwrap_rel_path: String,
+    #[serde(default = "default_helper_rel_path")]
     helper_rel_path: String,
 }
 
@@ -85,7 +86,6 @@ pub fn run(args: SyncArgs) -> Result<SyncOutput> {
     let helper_path = extracted_root.join(&manifest.bundle.helper_rel_path);
     ensure_file(&daemon_path, "daemon binary")?;
     ensure_file(&bwrap_path, "bwrap binary")?;
-    ensure_file(&helper_path, "helper binary")?;
 
     let endpoint = resolve_endpoint(args.endpoint, None);
     let state = InstallState {
@@ -164,6 +164,10 @@ fn ensure_file(path: &Path, label: &str) -> Result<()> {
 
 fn default_bundle_format() -> String {
     "tar.gz".to_string()
+}
+
+fn default_helper_rel_path() -> String {
+    "helper".to_string()
 }
 
 #[derive(Debug, Clone)]

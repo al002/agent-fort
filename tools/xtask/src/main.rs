@@ -1,10 +1,16 @@
 use anyhow::{Context, Result, bail};
+use flate2::Compression;
+use flate2::write::GzEncoder;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::{fs::File, io::BufWriter};
+use tar::Builder;
 
 fn main() {
     if let Err(err) = run() {
@@ -25,6 +31,7 @@ fn run() -> Result<()> {
         "codegen" => run_codegen(&args[1..]),
         "dev" => run_dev(&args[1..]),
         "bwrap" => run_bwrap(&args[1..]),
+        "package" => run_package(&args[1..]),
         "help" | "--help" | "-h" => {
             print_usage();
             Ok(())
@@ -229,6 +236,326 @@ fn run_bwrap(args: &[String]) -> Result<()> {
             bail!("unknown `bwrap` subcommand `{other}`")
         }
     }
+}
+
+fn run_package(args: &[String]) -> Result<()> {
+    if args.is_empty() {
+        print_package_usage();
+        return Ok(());
+    }
+
+    match args[0].as_str() {
+        "bundle" => build_runtime_bundle(&args[1..]),
+        "help" | "--help" | "-h" => {
+            print_package_usage();
+            Ok(())
+        }
+        other => {
+            print_package_usage();
+            bail!("unknown `package` subcommand `{other}`")
+        }
+    }
+}
+
+const DEFAULT_RUNTIME_BUNDLE_FILE: &str = "bundle.tar.gz";
+const DEFAULT_RUNTIME_MANIFEST_FILE: &str = "manifest.json";
+const RUNTIME_DAEMON_ENTRY: &str = "agent-fortd";
+const RUNTIME_BWRAP_ENTRY: &str = "bwrap";
+const RUNTIME_HELPER_ENTRY: &str = "helper";
+
+#[derive(Debug, Clone, Copy)]
+enum BuildProfile {
+    Debug,
+    Release,
+}
+
+impl BuildProfile {
+    fn parse(raw: &str) -> Result<Self> {
+        match raw {
+            "debug" | "dev" => Ok(Self::Debug),
+            "release" => Ok(Self::Release),
+            other => bail!("unsupported profile `{other}`; expected debug/dev or release"),
+        }
+    }
+
+    fn output_dir(self) -> &'static str {
+        match self {
+            Self::Debug => "debug",
+            Self::Release => "release",
+        }
+    }
+
+    fn apply_to_command(self, command: &mut Command) {
+        if matches!(self, Self::Release) {
+            command.arg("--release");
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct PackageBundleArgs {
+    target: Option<String>,
+    profile: Option<BuildProfile>,
+    version: Option<String>,
+    output_dir: Option<PathBuf>,
+    bwrap_path: Option<PathBuf>,
+    helper_path: Option<PathBuf>,
+    bundle_name: Option<String>,
+    manifest_name: Option<String>,
+    skip_build: bool,
+}
+
+impl PackageBundleArgs {
+    fn parse(args: &[String]) -> Result<Self> {
+        let mut parsed = Self::default();
+        let mut i = 0usize;
+        while i < args.len() {
+            match args[i].as_str() {
+                "--target" => {
+                    let (value, next) = parse_option_value(args, i, "--target")?;
+                    parsed.target = Some(value);
+                    i = next;
+                }
+                "--profile" => {
+                    let (value, next) = parse_option_value(args, i, "--profile")?;
+                    parsed.profile = Some(BuildProfile::parse(&value)?);
+                    i = next;
+                }
+                "--version" => {
+                    let (value, next) = parse_option_value(args, i, "--version")?;
+                    parsed.version = Some(value);
+                    i = next;
+                }
+                "--output-dir" => {
+                    let (value, next) = parse_option_value(args, i, "--output-dir")?;
+                    parsed.output_dir = Some(PathBuf::from(value));
+                    i = next;
+                }
+                "--bwrap-path" => {
+                    let (value, next) = parse_option_value(args, i, "--bwrap-path")?;
+                    parsed.bwrap_path = Some(PathBuf::from(value));
+                    i = next;
+                }
+                "--helper-path" => {
+                    let (value, next) = parse_option_value(args, i, "--helper-path")?;
+                    parsed.helper_path = Some(PathBuf::from(value));
+                    i = next;
+                }
+                "--bundle-name" => {
+                    let (value, next) = parse_option_value(args, i, "--bundle-name")?;
+                    parsed.bundle_name = Some(value);
+                    i = next;
+                }
+                "--manifest-name" => {
+                    let (value, next) = parse_option_value(args, i, "--manifest-name")?;
+                    parsed.manifest_name = Some(value);
+                    i = next;
+                }
+                "--skip-build" => {
+                    parsed.skip_build = true;
+                    i += 1;
+                }
+                other => {
+                    bail!("unknown option for `package bundle`: `{other}`");
+                }
+            }
+        }
+        Ok(parsed)
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct BootstrapSyncManifest {
+    version: String,
+    bundle: BootstrapSyncBundle,
+}
+
+#[derive(Debug, Serialize)]
+struct BootstrapSyncBundle {
+    source: String,
+    sha256: String,
+    format: String,
+    daemon_rel_path: String,
+    bwrap_rel_path: String,
+    helper_rel_path: String,
+}
+
+fn build_runtime_bundle(args: &[String]) -> Result<()> {
+    if has_flag(args, "--help") || has_flag(args, "-h") {
+        print_package_bundle_usage();
+        return Ok(());
+    }
+
+    let parsed = PackageBundleArgs::parse(args)?;
+    let root = repo_root()?;
+    let target = parsed.target.unwrap_or_else(machine_target_label);
+    let profile = parsed.profile.unwrap_or(BuildProfile::Release);
+    let version = parsed.version.unwrap_or_else(default_runtime_version);
+    let output_dir = parsed
+        .output_dir
+        .unwrap_or_else(|| root.join("assets").join("bootstrap").join(&target));
+    let bundle_name = parsed
+        .bundle_name
+        .unwrap_or_else(|| DEFAULT_RUNTIME_BUNDLE_FILE.to_string());
+    let manifest_name = parsed
+        .manifest_name
+        .unwrap_or_else(|| DEFAULT_RUNTIME_MANIFEST_FILE.to_string());
+    let bundle_path = output_dir.join(&bundle_name);
+    let manifest_path = output_dir.join(&manifest_name);
+
+    fs::create_dir_all(&output_dir)
+        .with_context(|| format!("failed to create {}", output_dir.display()))?;
+
+    if !parsed.skip_build {
+        build_runtime_binaries(&root, profile)?;
+    }
+
+    let daemon_binary = binary_output_path(&root, profile, "agent-fortd");
+    let bwrap_binary = parsed
+        .bwrap_path
+        .unwrap_or_else(|| bwrap_output_binary(&root, &target));
+    let helper_binary = parsed
+        .helper_path
+        .unwrap_or_else(|| binary_output_path(&root, profile, "af-helper"));
+
+    ensure_packaging_input(&daemon_binary, "agent-fortd binary")?;
+    ensure_packaging_input(&bwrap_binary, "bwrap binary")?;
+    ensure_packaging_input(&helper_binary, "agent-fort-helper binary")?;
+
+    create_runtime_bundle_archive(&bundle_path, &daemon_binary, &bwrap_binary, &helper_binary)?;
+    let bundle_sha256 = sha256_hex_file(&bundle_path)?;
+
+    let manifest = BootstrapSyncManifest {
+        version,
+        bundle: BootstrapSyncBundle {
+            source: bundle_name.clone(),
+            sha256: bundle_sha256.clone(),
+            format: "tar.gz".to_string(),
+            daemon_rel_path: RUNTIME_DAEMON_ENTRY.to_string(),
+            bwrap_rel_path: RUNTIME_BWRAP_ENTRY.to_string(),
+            helper_rel_path: RUNTIME_HELPER_ENTRY.to_string(),
+        },
+    };
+    write_runtime_manifest(&manifest_path, &manifest)?;
+
+    let checksum_path = output_dir.join("bundle.sha256");
+    fs::write(&checksum_path, format!("{bundle_sha256}  {bundle_name}\n"))
+        .with_context(|| format!("failed to write {}", checksum_path.display()))?;
+
+    println!("runtime bundle: {}", bundle_path.display());
+    println!("manifest: {}", manifest_path.display());
+    println!("bundle sha256: {bundle_sha256}");
+    Ok(())
+}
+
+fn parse_option_value(args: &[String], index: usize, option: &str) -> Result<(String, usize)> {
+    let value = args
+        .get(index + 1)
+        .with_context(|| format!("missing value for `{option}`"))?
+        .to_string();
+    Ok((value, index + 2))
+}
+
+fn default_runtime_version() -> String {
+    let generated_at_unix_s = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs());
+    format!("dev-{generated_at_unix_s}")
+}
+
+fn build_runtime_binaries(root: &Path, profile: BuildProfile) -> Result<()> {
+    let mut build = Command::new("cargo");
+    build
+        .arg("build")
+        .arg("--package")
+        .arg("agent-fortd")
+        .arg("--package")
+        .arg("af-helper")
+        .current_dir(root);
+    profile.apply_to_command(&mut build);
+    run_checked(&mut build, "build agent-fortd and af-helper binaries")
+}
+
+fn binary_output_path(root: &Path, profile: BuildProfile, binary: &str) -> PathBuf {
+    root.join("target")
+        .join(profile.output_dir())
+        .join(binary_file_name(binary))
+}
+
+fn binary_file_name(binary: &str) -> String {
+    if env::consts::EXE_EXTENSION.is_empty() {
+        binary.to_string()
+    } else {
+        format!("{binary}.{}", env::consts::EXE_EXTENSION)
+    }
+}
+
+fn ensure_packaging_input(path: &Path, label: &str) -> Result<()> {
+    if !path.is_file() {
+        bail!("{label} not found at {}", path.display());
+    }
+    Ok(())
+}
+
+fn create_runtime_bundle_archive(
+    bundle_path: &Path,
+    daemon_binary: &Path,
+    bwrap_binary: &Path,
+    helper_binary: &Path,
+) -> Result<()> {
+    let file = File::create(bundle_path)
+        .with_context(|| format!("failed to create {}", bundle_path.display()))?;
+    let writer = BufWriter::new(file);
+    let encoder = GzEncoder::new(writer, Compression::default());
+    let mut archive = Builder::new(encoder);
+
+    append_bundle_entry(&mut archive, daemon_binary, RUNTIME_DAEMON_ENTRY)?;
+    append_bundle_entry(&mut archive, bwrap_binary, RUNTIME_BWRAP_ENTRY)?;
+    append_bundle_entry(&mut archive, helper_binary, RUNTIME_HELPER_ENTRY)?;
+
+    archive
+        .finish()
+        .context("failed to finish runtime bundle archive")?;
+    let encoder = archive
+        .into_inner()
+        .context("failed to finalize runtime bundle archive writer")?;
+    let mut writer = encoder
+        .finish()
+        .context("failed to finalize runtime bundle gzip stream")?;
+    std::io::Write::flush(&mut writer).context("failed to flush runtime bundle output")
+}
+
+fn append_bundle_entry(
+    archive: &mut Builder<GzEncoder<BufWriter<File>>>,
+    source: &Path,
+    archive_name: &str,
+) -> Result<()> {
+    archive
+        .append_path_with_name(source, archive_name)
+        .with_context(|| format!("failed to append {} as {}", source.display(), archive_name))
+}
+
+fn sha256_hex_file(path: &Path) -> Result<String> {
+    let mut file = File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .with_context(|| format!("read {}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn write_runtime_manifest(path: &Path, manifest: &BootstrapSyncManifest) -> Result<()> {
+    let content =
+        serde_json::to_string_pretty(manifest).context("failed to serialize runtime manifest")?;
+    fs::write(path, format!("{content}\n"))
+        .with_context(|| format!("failed to write {}", path.display()))
 }
 
 fn build_bwrap(args: &[String]) -> Result<()> {
@@ -555,6 +882,7 @@ fn print_usage() {
     eprintln!("  cargo xtask codegen <check-rust-proto>");
     eprintln!("  cargo xtask dev <fmt|lint|test|integration|all>");
     eprintln!("  cargo xtask bwrap <build|verify> [options]");
+    eprintln!("  cargo xtask package <bundle> [options]");
 }
 
 fn print_proto_usage() {
@@ -585,4 +913,32 @@ fn print_bwrap_usage() {
         "  cargo xtask bwrap build [--target <label>] [--engine <podman|docker>] [--image <name>] [--no-cache]"
     );
     eprintln!("  cargo xtask bwrap verify [--target <label>]");
+}
+
+fn print_package_usage() {
+    eprintln!("Usage:");
+    eprintln!("  cargo xtask package bundle [options]");
+    eprintln!();
+    print_package_bundle_usage();
+}
+
+fn print_package_bundle_usage() {
+    eprintln!("Options for `cargo xtask package bundle`:");
+    eprintln!(
+        "  (bundle entries: agent-fortd, bwrap, helper; bootstrap is distributed separately)"
+    );
+    eprintln!("  --target <label>         Bundle target label (default: current os-arch)");
+    eprintln!("  --profile <debug|release> Cargo build profile (default: release)");
+    eprintln!("  --version <version>      Manifest version string (default: dev-<unix_s>)");
+    eprintln!("  --output-dir <path>      Output directory (default: assets/bootstrap/<target>)");
+    eprintln!(
+        "  --bwrap-path <path>      bwrap binary path (default: assets/bwrap/<target>/bwrap)"
+    );
+    eprintln!(
+        "  --helper-path <path>     helper binary path (default: target/<profile>/af-helper)"
+    );
+    eprintln!("  --bundle-name <name>     Bundle file name (default: bundle.tar.gz)");
+    eprintln!("  --manifest-name <name>   Manifest file name (default: manifest.json)");
+    eprintln!("  --skip-build             Skip cargo build and package existing binaries");
+    eprintln!("  -h, --help");
 }

@@ -1,0 +1,99 @@
+syntax = "proto3";
+
+package agent.fort.v1;
+
+enum PolicyDecisionKind {
+  POLICY_DECISION_KIND_UNSPECIFIED = 0;
+  POLICY_DECISION_KIND_ALLOW = 1;
+  POLICY_DECISION_KIND_ASK = 2;
+  POLICY_DECISION_KIND_DENY = 3;
+  POLICY_DECISION_KIND_FORBIDDEN = 4;
+}
+
+enum PolicyAmendApplyMode {
+  POLICY_AMEND_APPLY_MODE_UNSPECIFIED = 0;
+  POLICY_AMEND_APPLY_MODE_IMMEDIATE = 1;
+  POLICY_AMEND_APPLY_MODE_STAGED = 2;
+}
+
+message InputSummary {
+  optional string command = 1;
+  repeated string command_argv = 2;
+  optional string cwd = 3;
+  optional string target = 4;
+  optional string url = 5;
+  optional string extra_json = 6;
+}
+
+message PolicyInput {
+  string capability = 1;
+  string operation = 2;
+  InputSummary input_summary = 3;
+  string risk_class = 4;
+  string command_class = 5;
+  string requested_runtime_class = 6;
+  string resolved_runtime_class = 7;
+  bool requires_network = 8;
+  bool requires_pty = 9;
+  optional string session_policy_profile = 10;
+}
+
+message PolicyDecision {
+  PolicyDecisionKind kind = 1;
+  string reason = 2;
+  optional string file = 3;
+  optional string rule_id = 4;
+}
+
+message PolicyFileSnapshot {
+  string file = 1;
+  bool enabled = 2;
+  uint64 revision = 3;
+  uint32 rule_count = 4;
+}
+
+message PolicySnapshot {
+  uint64 generation = 1;
+  uint64 loaded_at_ms = 2;
+  PolicyDecisionKind default_decision = 3;
+  repeated PolicyFileSnapshot files = 4;
+}
+
+message EvaluatePolicyRequest {
+  PolicyInput input = 1;
+}
+
+message EvaluatePolicyResponse {
+  PolicyDecision decision = 1;
+}
+
+message GetPolicyStateRequest {}
+
+message GetPolicyStateResponse {
+  PolicySnapshot snapshot = 1;
+}
+
+message AmendPolicyFileRequest {
+  string file = 1;
+  string line = 2;
+  bool deduplicate = 3;
+  PolicyAmendApplyMode apply_mode = 4;
+}
+
+message PolicyFileAmendmentResult {
+  string file = 1;
+  uint64 revision = 2;
+  bool appended = 3;
+  bool applied = 4;
+  uint64 generation = 5;
+}
+
+message AmendPolicyFileResponse {
+  PolicyFileAmendmentResult result = 1;
+}
+
+message ReloadPolicyRequest {}
+
+message ReloadPolicyResponse {
+  PolicySnapshot snapshot = 1;
+}

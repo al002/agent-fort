@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = [
+    "apps/*",
+    "core",
+    "protocol/*",
+    "domain/*",
+    "tools/xtask",
+]
+
+[workspace.dependencies]
+tokio = { version = "1.50", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2.0"
+anyhow = "1.0"
+serde_json = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"] }
+uuid = { version = "1.22", features = ["v4", "serde"] }
+libc = "0.2"
+rusqlite = { version = "0.38", features = ["bundled"] }
+prost = "0.14"
+
+[profile.release]
+opt-level = "z"
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"

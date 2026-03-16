@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package agent.fort.v1;
+
+import "agent/fort/v1/approval.proto";
+import "agent/fort/v1/common.proto";
+import "agent/fort/v1/policy.proto";
+import "agent/fort/v1/session.proto";
+import "agent/fort/v1/task.proto";
+
+message PingRequest {}
+
+message PingResponse {
+  string status = 1;
+  string daemon_instance_id = 2;
+}
+
+message GetDaemonInfoRequest {}
+
+message GetDaemonInfoResponse {
+  DaemonInfo info = 1;
+}
+
+message InvokeRequest {
+  string session_id = 1;
+  string client_instance_id = 2;
+  string rebind_token = 3;
+  string capability = 4;
+  string operation = 5;
+  string input_json = 6;
+  optional string goal = 7;
+  optional string budget_json = 8;
+}
+
+message InvokeResponse {
+  InvokeResult result = 1;
+}
+
+service AgentFortService {
+  rpc Ping(PingRequest) returns (PingResponse);
+  rpc GetDaemonInfo(GetDaemonInfoRequest) returns (GetDaemonInfoResponse);
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+  rpc RenewLease(RenewLeaseRequest) returns (RenewLeaseResponse);
+  rpc Keepalive(KeepaliveRequest) returns (KeepaliveResponse);
+  rpc Invoke(InvokeRequest) returns (InvokeResponse);
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
+  rpc TerminateSession(TerminateSessionRequest) returns (TerminateSessionResponse);
+  rpc CreateTask(CreateTaskRequest) returns (CreateTaskResponse);
+  rpc GetTask(GetTaskRequest) returns (GetTaskResponse);
+  rpc CancelTask(CancelTaskRequest) returns (CancelTaskResponse);
+  rpc ListPendingApprovals(ListPendingApprovalsRequest) returns (ListPendingApprovalsResponse);
+  rpc GetApproval(GetApprovalRequest) returns (GetApprovalResponse);
+  rpc RespondApproval(RespondApprovalRequest) returns (RespondApprovalResponse);
+  rpc GetPolicyState(GetPolicyStateRequest) returns (GetPolicyStateResponse);
+  rpc EvaluatePolicy(EvaluatePolicyRequest) returns (EvaluatePolicyResponse);
+  rpc AmendPolicyFile(AmendPolicyFileRequest) returns (AmendPolicyFileResponse);
+  rpc ReloadPolicy(ReloadPolicyRequest) returns (ReloadPolicyResponse);
+}

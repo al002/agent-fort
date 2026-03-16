@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package agent.fort.v1;
+
+import "agent/fort/v1/common.proto";
+import "agent/fort/v1/policy.proto";
+import "agent/fort/v1/task.proto";
+
+enum ApprovalDecision {
+  APPROVAL_DECISION_UNSPECIFIED = 0;
+  APPROVAL_DECISION_APPROVE = 1;
+  APPROVAL_DECISION_DENY = 2;
+}
+
+message Approval {
+  string approval_id = 1;
+  string session_id = 2;
+  string task_id = 3;
+  string trace_id = 4;
+  string capability = 5;
+  string operation = 6;
+  ApprovalStatus status = 7;
+  string policy_reason = 8;
+  string risk_class = 9;
+  string command_class = 10;
+  string input_summary_json = 11;
+  string requested_runtime_class = 12;
+  string resolved_runtime_class = 13;
+  bool requires_network = 14;
+  bool requires_pty = 15;
+  uint64 created_at_ms = 16;
+  uint64 expires_at_ms = 17;
+  optional uint64 responded_at_ms = 18;
+  optional string response_reason = 19;
+  optional string response_idempotency_key = 20;
+}
+
+message ApprovalSummary {
+  string approval_id = 1;
+  ApprovalStatus status = 2;
+  uint64 expires_at_ms = 3;
+  string task_id = 4;
+  string capability = 5;
+  string operation = 6;
+  string policy_reason = 7;
+}
+
+message PendingApproval {
+  string approval_id = 1;
+  ApprovalStatus status = 2;
+  uint64 expires_at_ms = 3;
+  string task_id = 4;
+  string capability = 5;
+  string operation = 6;
+  string policy_reason = 7;
+}
+
+message InvokeResult {
+  Task task = 1;
+  string capability = 2;
+  string operation = 3;
+  string runtime_class = 4;
+  PolicyDecision decision = 5;
+  string execution_state = 6;
+  optional int32 exit_code = 7;
+  bool timed_out = 8;
+  string stdout = 9;
+  string stderr = 10;
+  bool stdout_truncated = 11;
+  bool stderr_truncated = 12;
+  optional PendingApproval approval = 13;
+}
+
+message ListPendingApprovalsRequest {
+  string session_id = 1;
+  string client_instance_id = 2;
+  string rebind_token = 3;
+  optional uint32 limit = 4;
+  optional string after = 5;
+}
+
+message ListPendingApprovalsResponse {
+  repeated ApprovalSummary approvals = 1;
+}
+
+message GetApprovalRequest {
+  string session_id = 1;
+  string approval_id = 2;
+  string client_instance_id = 3;
+  string rebind_token = 4;
+}
+
+message GetApprovalResponse {
+  Approval approval = 1;
+}
+
+message RespondApprovalRequest {
+  string session_id = 1;
+  string approval_id = 2;
+  ApprovalDecision decision = 3;
+  string idempotency_key = 4;
+  optional string reason = 5;
+  bool wait_for_terminal = 6;
+  optional uint64 wait_timeout_ms = 7;
+  string client_instance_id = 8;
+  string rebind_token = 9;
+}
+
+message RespondApprovalResponse {
+  Approval approval = 1;
+  Task task = 2;
+  optional InvokeResult invoke_result = 3;
+}

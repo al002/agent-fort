@@ -1,0 +1,9 @@
+version: v2
+clean: true
+
+managed:
+  enabled: false
+
+plugins:
+  - remote: buf.build/community/neoeinstein-prost
+    out: target/buf-gen/rust

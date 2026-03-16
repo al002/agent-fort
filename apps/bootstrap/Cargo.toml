@@ -1,0 +1,15 @@
+[package]
+name = "af-bootstrap"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+af-rpc-proto = { path = "../../protocol/rpc-proto" }
+anyhow = { workspace = true }
+flate2 = "1.1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.10"
+tar = "0.4"
+ureq = { version = "3.2", default-features = false, features = ["rustls"] }
+url = "2.5"

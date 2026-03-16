@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+package agent.fort.v1;
+
+enum SessionStatus {
+  SESSION_STATUS_UNSPECIFIED = 0;
+  SESSION_STATUS_ACTIVE = 1;
+  SESSION_STATUS_EXPIRED = 2;
+  SESSION_STATUS_TERMINATED = 3;
+}
+
+message SessionLease {
+  string client_instance_id = 1;
+  string rebind_token = 2;
+  uint64 expires_at_ms = 3;
+}
+
+message Session {
+  string session_id = 1;
+  string actor_id = 2;
+  string agent_id = 3;
+  string policy_profile = 4;
+  SessionStatus status = 5;
+  SessionLease lease = 6;
+  uint64 created_at_ms = 7;
+  uint64 updated_at_ms = 8;
+}
+
+message CreateSessionRequest {
+  string actor_id = 1;
+  string agent_id = 2;
+  string policy_profile = 3;
+  string client_instance_id = 4;
+  optional uint64 lease_ttl_secs = 5;
+}
+
+message CreateSessionResponse {
+  Session session = 1;
+}
+
+message RenewLeaseRequest {
+  string session_id = 1;
+  string client_instance_id = 2;
+  string rebind_token = 3;
+  optional uint64 lease_ttl_secs = 4;
+}
+
+message RenewLeaseResponse {
+  Session session = 1;
+}
+
+message KeepaliveRequest {
+  string session_id = 1;
+  string client_instance_id = 2;
+  string rebind_token = 3;
+  optional uint64 lease_ttl_secs = 4;
+}
+
+message KeepaliveResponse {
+  Session session = 1;
+}
+
+message GetSessionRequest {
+  string session_id = 1;
+  string client_instance_id = 2;
+  string rebind_token = 3;
+}
+
+message GetSessionResponse {
+  Session session = 1;
+}
+
+message TerminateSessionRequest {
+  string session_id = 1;
+  string client_instance_id = 2;
+  string rebind_token = 3;
+}
+
+message TerminateSessionResponse {
+  Session session = 1;
+}

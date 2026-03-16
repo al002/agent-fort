@@ -1,0 +1,10 @@
+[package]
+name = "af-rpc-transport"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+af-rpc-proto = { path = "../rpc-proto" }
+prost = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }

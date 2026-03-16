@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package agent.fort.v1;
+
+enum TaskStatus {
+  TASK_STATUS_UNSPECIFIED = 0;
+  TASK_STATUS_PENDING = 1;
+  TASK_STATUS_RUNNING = 2;
+  TASK_STATUS_BLOCKED = 3;
+  TASK_STATUS_COMPLETED = 4;
+  TASK_STATUS_FAILED = 5;
+  TASK_STATUS_CANCELLED = 6;
+}
+
+enum TaskCreatedBy {
+  TASK_CREATED_BY_UNSPECIFIED = 0;
+  TASK_CREATED_BY_EXPLICIT = 1;
+  TASK_CREATED_BY_INVOKE = 2;
+}
+
+message Task {
+  string task_id = 1;
+  string session_id = 2;
+  TaskStatus status = 3;
+  optional string goal = 4;
+  TaskCreatedBy created_by = 5;
+  string trace_id = 6;
+  optional string budget_json = 7;
+  uint32 current_step = 8;
+  optional string error_code = 9;
+  optional string error_message = 10;
+  uint64 created_at_ms = 11;
+  uint64 updated_at_ms = 12;
+  optional uint64 ended_at_ms = 13;
+}
+
+message CreateTaskRequest {
+  string session_id = 1;
+  string client_instance_id = 2;
+  string rebind_token = 3;
+  optional string goal = 4;
+  optional string budget_json = 5;
+}
+
+message CreateTaskResponse {
+  Task task = 1;
+}
+
+message GetTaskRequest {
+  string session_id = 1;
+  string task_id = 2;
+  string client_instance_id = 3;
+  string rebind_token = 4;
+}
+
+message GetTaskResponse {
+  Task task = 1;
+}
+
+message CancelTaskRequest {
+  string session_id = 1;
+  string task_id = 2;
+  string client_instance_id = 3;
+  string rebind_token = 4;
+}
+
+message CancelTaskResponse {
+  Task task = 1;
+}

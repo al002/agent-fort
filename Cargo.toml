@@ -5,6 +5,7 @@ members = [
     "core",
     "protocol/*",
     "domain/*",
+    "infra/*",
     "tools/xtask",
 ]
 

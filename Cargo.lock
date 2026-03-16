@@ -17,6 +17,10 @@ name = "af-audit"
 version = "0.1.0"
 
 [[package]]
+name = "af-audit-sink"
+version = "0.1.0"
+
+[[package]]
 name = "af-bootstrap"
 version = "0.1.0"
 dependencies = [
@@ -38,6 +42,20 @@ version = "0.1.0"
 [[package]]
 name = "af-helper"
 version = "0.1.0"
+dependencies = [
+ "af-linux-sandbox",
+ "af-sandbox",
+ "anyhow",
+ "serde_json",
+]
+
+[[package]]
+name = "af-linux-sandbox"
+version = "0.1.0"
+dependencies = [
+ "af-sandbox",
+ "libc",
+]
 
 [[package]]
 name = "af-policy"
@@ -63,7 +81,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "af-sandbox"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "af-session"
+version = "0.1.0"
+
+[[package]]
+name = "af-store"
 version = "0.1.0"
 
 [[package]]
@@ -76,7 +107,9 @@ version = "0.1.0"
 dependencies = [
  "af-rpc-proto",
  "af-rpc-transport",
+ "af-sandbox",
  "anyhow",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",

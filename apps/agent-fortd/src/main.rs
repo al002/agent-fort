@@ -1,5 +1,6 @@
 mod bootstrap;
 mod config;
+mod helper_client;
 mod rpc_controller;
 mod server;
 

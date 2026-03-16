@@ -40,6 +40,7 @@ pub fn run(args: StartArgs) -> Result<StartOutput> {
 
     ensure_file(&state.daemon_path, "daemon binary")?;
     ensure_file(&state.bwrap_path, "bwrap binary")?;
+    ensure_file(&state.helper_path, "helper binary")?;
 
     if let Ok(response) = ping_once(&endpoint) {
         return Ok(StartOutput {
@@ -51,7 +52,12 @@ pub fn run(args: StartArgs) -> Result<StartOutput> {
         });
     }
 
-    let daemon_pid = spawn_daemon(&state.daemon_path, &endpoint)?;
+    let daemon_pid = spawn_daemon(
+        &state.daemon_path,
+        &endpoint,
+        &state.bwrap_path,
+        &state.helper_path,
+    )?;
     let deadline = Instant::now() + Duration::from_millis(args.startup_timeout_ms);
     let poll_interval = Duration::from_millis(args.ping_interval_ms.max(10));
     loop {
@@ -153,9 +159,16 @@ fn read_frame(stream: &mut impl Read) -> Result<Vec<u8>> {
     Ok(payload)
 }
 
-fn spawn_daemon(daemon_path: &Path, endpoint: &str) -> Result<u32> {
+fn spawn_daemon(
+    daemon_path: &Path,
+    endpoint: &str,
+    bwrap_path: &Path,
+    helper_path: &Path,
+) -> Result<u32> {
     let child = Command::new(daemon_path)
         .env("AF_DAEMON_ENDPOINT", endpoint)
+        .env("AF_BWRAP_PATH", bwrap_path)
+        .env("AF_HELPER_PATH", helper_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

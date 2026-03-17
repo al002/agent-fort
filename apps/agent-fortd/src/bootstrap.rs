@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use af_policy_infra::{PolicyDirectoryRuntime, PolicyDirectorySourceConfig};
+use af_policy_infra::{PolicyRuntime, PolicyRuntimeConfig};
 use af_store::Store;
 use anyhow::Result;
 use tracing::info;
@@ -15,7 +15,7 @@ pub struct BootstrappedDaemon {
     config: DaemonConfig,
     server: DaemonServer,
     _helper_client: HelperClient,
-    _policy_runtime: PolicyDirectoryRuntime,
+    _policy_runtime: PolicyRuntime,
 }
 
 impl BootstrappedDaemon {
@@ -30,12 +30,13 @@ impl BootstrappedDaemon {
             "sqlite store ready"
         );
 
-        let policy_runtime = PolicyDirectoryRuntime::start(PolicyDirectorySourceConfig::new(
-            config.policy_dir.clone(),
-        ))?;
+        let policy_runtime = PolicyRuntime::start(PolicyRuntimeConfig::new(config.policy_dir.clone()))?;
+        let policy_status = policy_runtime.status()?;
         info!(
             policy_dir = %config.policy_dir.display(),
-            policy_files = policy_runtime.snapshot().file_count(),
+            policy_revision = policy_status.revision,
+            policy_files = policy_status.file_count,
+            policy_rules = policy_status.rule_count,
             "policy directory runtime ready"
         );
 

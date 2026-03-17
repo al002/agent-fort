@@ -8,6 +8,40 @@ import "agent/fort/v1/policy.proto";
 import "agent/fort/v1/session.proto";
 import "agent/fort/v1/task.proto";
 
+enum RpcMethod {
+  RPC_METHOD_UNSPECIFIED = 0;
+  RPC_METHOD_PING = 1;
+  RPC_METHOD_GET_DAEMON_INFO = 2;
+  RPC_METHOD_CREATE_SESSION = 3;
+  RPC_METHOD_RENEW_LEASE = 4;
+  RPC_METHOD_KEEPALIVE = 5;
+  RPC_METHOD_INVOKE = 6;
+  RPC_METHOD_GET_SESSION = 7;
+  RPC_METHOD_TERMINATE_SESSION = 8;
+  RPC_METHOD_CREATE_TASK = 9;
+  RPC_METHOD_GET_TASK = 10;
+  RPC_METHOD_CANCEL_TASK = 11;
+  RPC_METHOD_LIST_PENDING_APPROVALS = 12;
+  RPC_METHOD_GET_APPROVAL = 13;
+  RPC_METHOD_RESPOND_APPROVAL = 14;
+  RPC_METHOD_GET_POLICY_STATE = 15;
+  RPC_METHOD_EVALUATE_POLICY = 16;
+  RPC_METHOD_AMEND_POLICY_FILE = 17;
+  RPC_METHOD_RELOAD_POLICY = 18;
+}
+
+message RpcRequest {
+  RpcMethod method = 1;
+  bytes payload = 2;
+}
+
+message RpcResponse {
+  oneof outcome {
+    bytes payload = 1;
+    RpcError error = 2;
+  }
+}
+
 message PingRequest {}
 
 message PingResponse {

@@ -15,6 +15,6 @@ pub use bootstrap::{
 };
 pub use client::{AgentFortClient, SdkConfig};
 pub use error::{Result, SdkError};
-pub use runtime::RuntimeClient;
+pub use runtime::{CreateSessionOptions, RuntimeClient};
 pub use session::SessionClient;
 pub use task::TaskClient;

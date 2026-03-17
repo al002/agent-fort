@@ -44,6 +44,12 @@ dependencies = [
 [[package]]
 name = "af-core"
 version = "0.1.0"
+dependencies = [
+ "af-audit",
+ "af-session",
+ "thiserror",
+ "uuid",
+]
 
 [[package]]
 name = "af-example-agent-tui"
@@ -118,6 +124,7 @@ dependencies = [
  "tokio",
  "ureq",
  "url",
+ "uuid",
  "wait-timeout",
 ]
 
@@ -134,6 +141,7 @@ version = "0.1.0"
 dependencies = [
  "af-approval",
  "af-audit",
+ "af-core",
  "af-session",
  "af-task",
  "rusqlite",
@@ -151,9 +159,12 @@ dependencies = [
 name = "agent-fortd"
 version = "0.1.0"
 dependencies = [
+ "af-audit",
+ "af-core",
  "af-rpc-proto",
  "af-rpc-transport",
  "af-sandbox",
+ "af-session",
  "af-store",
  "anyhow",
  "serde_json",

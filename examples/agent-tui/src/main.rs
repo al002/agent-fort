@@ -130,7 +130,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn initialize_sdk() -> String {
-    let config = SdkConfig::default();
+    let config = SdkConfig::new("agent-tui");
 
     if let Err(error) = AgentFortClient::initialize(config.clone()).await {
         return format!("SDK initialize failed: {error}");

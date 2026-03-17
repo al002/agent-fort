@@ -6,6 +6,10 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::{Store, StoreError, StoreResult, is_dup_key, sql_err, storage_msg, to_i64, to_u64};
 
+const RULE_APPROVAL_EXPIRED: &str = "approval_expired";
+const RULE_APPROVAL_IDEMPOTENCY_CONFLICT: &str = "approval_idempotency_conflict";
+const RULE_APPROVAL_INVALID_STATE: &str = "approval_invalid_state";
+
 impl ApprovalRepository for Store {
     fn create_approval(&self, command: NewApproval) -> Result<Approval, ApprovalRepositoryError> {
         let approval_id = command.approval_id.clone();
@@ -198,10 +202,10 @@ fn respond_approval(
     match current_status {
         ApprovalStatus::Pending => {
             if command.responded_at_ms > to_u64(existing.expires_at_ms, "expires_at_ms")? {
-                return Err(StoreError::Conflict(format!(
-                    "approval expired: approval_id={}",
-                    command.approval_id
-                )));
+                return Err(StoreError::RuleConflict {
+                    code: RULE_APPROVAL_EXPIRED,
+                    message: format!("approval expired: approval_id={}", command.approval_id),
+                });
             }
 
             let new_status = approval_status_to_db(decision_to_status(command.decision));
@@ -227,15 +231,15 @@ fn respond_approval(
                 if existing_key == command.idempotency_key {
                     return existing.into_domain();
                 }
-                return Err(StoreError::Conflict(format!(
-                    "idempotency_conflict: approval_id={}",
-                    command.approval_id
-                )));
+                return Err(StoreError::RuleConflict {
+                    code: RULE_APPROVAL_IDEMPOTENCY_CONFLICT,
+                    message: format!("idempotency conflict: approval_id={}", command.approval_id),
+                });
             }
-            return Err(StoreError::Conflict(format!(
-                "approval not pending: approval_id={}",
-                command.approval_id
-            )));
+            return Err(StoreError::RuleConflict {
+                code: RULE_APPROVAL_INVALID_STATE,
+                message: format!("approval not pending: approval_id={}", command.approval_id),
+            });
         }
     }
 
@@ -477,6 +481,7 @@ fn on_create_err(error: StoreError, approval_id: &str) -> ApprovalRepositoryErro
             }
         }
         StoreError::Conflict(message) => ApprovalRepositoryError::Conflict { message },
+        StoreError::RuleConflict { message, .. } => ApprovalRepositoryError::Conflict { message },
         StoreError::NotFound(message) => ApprovalRepositoryError::Storage { message },
         StoreError::BusyTimeout(message)
         | StoreError::Internal(message)
@@ -497,6 +502,7 @@ fn on_lookup_err(
         },
         StoreError::ConstraintViolation(message)
         | StoreError::Conflict(message)
+        | StoreError::RuleConflict { message, .. }
         | StoreError::BusyTimeout(message)
         | StoreError::Internal(message)
         | StoreError::MigrationFailed(message)
@@ -514,19 +520,17 @@ fn on_respond_err(
             session_id: session_id.to_string(),
             approval_id: approval_id.to_string(),
         },
-        StoreError::Conflict(message) => {
-            if message.contains("idempotency_conflict") {
-                ApprovalRepositoryError::IdempotencyConflict {
-                    approval_id: approval_id.to_string(),
-                }
-            } else if message.contains("expired") {
-                ApprovalRepositoryError::Expired {
-                    approval_id: approval_id.to_string(),
-                }
-            } else {
-                ApprovalRepositoryError::InvalidState { message }
-            }
-        }
+        StoreError::RuleConflict { code, message } => match code {
+            RULE_APPROVAL_IDEMPOTENCY_CONFLICT => ApprovalRepositoryError::IdempotencyConflict {
+                approval_id: approval_id.to_string(),
+            },
+            RULE_APPROVAL_EXPIRED => ApprovalRepositoryError::Expired {
+                approval_id: approval_id.to_string(),
+            },
+            RULE_APPROVAL_INVALID_STATE => ApprovalRepositoryError::InvalidState { message },
+            _ => ApprovalRepositoryError::InvalidState { message },
+        },
+        StoreError::Conflict(message) => ApprovalRepositoryError::InvalidState { message },
         StoreError::ConstraintViolation(message)
         | StoreError::BusyTimeout(message)
         | StoreError::Internal(message)

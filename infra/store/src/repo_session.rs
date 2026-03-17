@@ -1,10 +1,11 @@
 use af_session::{
-    NewSession, RenewLeaseCommand, Session, SessionLease, SessionRepository,
-    SessionRepositoryError, SessionStatus, TerminateSessionCommand,
+    NewSession, RenewLeaseCommand, Session, SessionRepository, SessionRepositoryError,
+    SessionStatus, TerminateSessionCommand,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::{Store, StoreError, StoreResult, is_dup_key, sql_err, storage_msg, to_i64, to_u64};
+use crate::sql_session::{RawSession, row_to_raw_session, session_status_to_db};
+use crate::{Store, StoreError, StoreResult, is_dup_key, sql_err, storage_msg, to_i64};
 
 impl SessionRepository for Store {
     fn create_session(&self, command: NewSession) -> Result<Session, SessionRepositoryError> {
@@ -57,14 +58,13 @@ fn insert_session(connection: &mut Connection, command: NewSession) -> StoreResu
     connection
         .execute(
             "INSERT INTO sessions (
-               session_id, actor_id, agent_id, policy_profile, status,
+               session_id, agent_name, policy_profile, status,
                client_instance_id, rebind_token, lease_expires_at_ms,
                created_at_ms, updated_at_ms, terminated_at_ms
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL)",
             params![
                 command.session_id,
-                command.actor_id,
-                command.agent_id,
+                command.agent_name,
                 command.policy_profile,
                 session_status_to_db(SessionStatus::Active),
                 command.lease.client_instance_id,
@@ -150,8 +150,7 @@ fn list_expired(connection: &mut Connection, now_ms: u64, limit: u32) -> StoreRe
         .prepare(
             "SELECT
                session_id,
-               actor_id,
-               agent_id,
+               agent_name,
                policy_profile,
                status,
                client_instance_id,
@@ -189,8 +188,7 @@ fn load_session(connection: &Connection, session_id: &str) -> StoreResult<Option
         .query_row(
             "SELECT
                session_id,
-               actor_id,
-               agent_id,
+               agent_name,
                policy_profile,
                status,
                client_instance_id,
@@ -232,79 +230,6 @@ fn on_update_miss(connection: &Connection, session_id: &str) -> StoreResult<Sess
     }
 }
 
-#[derive(Debug)]
-struct RawSession {
-    session_id: String,
-    actor_id: String,
-    agent_id: String,
-    policy_profile: String,
-    status: String,
-    client_instance_id: String,
-    rebind_token: String,
-    lease_expires_at_ms: i64,
-    created_at_ms: i64,
-    updated_at_ms: i64,
-    terminated_at_ms: Option<i64>,
-}
-
-impl RawSession {
-    fn into_domain(self) -> StoreResult<Session> {
-        Ok(Session {
-            session_id: self.session_id,
-            actor_id: self.actor_id,
-            agent_id: self.agent_id,
-            policy_profile: self.policy_profile,
-            status: session_status_from_db(&self.status)?,
-            lease: SessionLease {
-                client_instance_id: self.client_instance_id,
-                rebind_token: self.rebind_token,
-                expires_at_ms: to_u64(self.lease_expires_at_ms, "lease_expires_at_ms")?,
-            },
-            created_at_ms: to_u64(self.created_at_ms, "created_at_ms")?,
-            updated_at_ms: to_u64(self.updated_at_ms, "updated_at_ms")?,
-            terminated_at_ms: self
-                .terminated_at_ms
-                .map(|value| to_u64(value, "terminated_at_ms"))
-                .transpose()?,
-        })
-    }
-}
-
-fn row_to_raw_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawSession> {
-    Ok(RawSession {
-        session_id: row.get(0)?,
-        actor_id: row.get(1)?,
-        agent_id: row.get(2)?,
-        policy_profile: row.get(3)?,
-        status: row.get(4)?,
-        client_instance_id: row.get(5)?,
-        rebind_token: row.get(6)?,
-        lease_expires_at_ms: row.get(7)?,
-        created_at_ms: row.get(8)?,
-        updated_at_ms: row.get(9)?,
-        terminated_at_ms: row.get(10)?,
-    })
-}
-
-fn session_status_to_db(status: SessionStatus) -> &'static str {
-    match status {
-        SessionStatus::Active => "ACTIVE",
-        SessionStatus::Expired => "EXPIRED",
-        SessionStatus::Terminated => "TERMINATED",
-    }
-}
-
-fn session_status_from_db(status: &str) -> StoreResult<SessionStatus> {
-    match status {
-        "ACTIVE" => Ok(SessionStatus::Active),
-        "EXPIRED" => Ok(SessionStatus::Expired),
-        "TERMINATED" => Ok(SessionStatus::Terminated),
-        _ => Err(StoreError::Internal(format!(
-            "invalid session status in db: {status}"
-        ))),
-    }
-}
-
 fn on_create_err(error: StoreError, session_id: &str) -> SessionRepositoryError {
     match error {
         StoreError::ConstraintViolation(message) => {
@@ -317,6 +242,7 @@ fn on_create_err(error: StoreError, session_id: &str) -> SessionRepositoryError 
             }
         }
         StoreError::Conflict(message) => SessionRepositoryError::Conflict { message },
+        StoreError::RuleConflict { message, .. } => SessionRepositoryError::Conflict { message },
         StoreError::NotFound(_) => SessionRepositoryError::NotFound {
             session_id: session_id.to_string(),
         },
@@ -337,6 +263,7 @@ fn on_get_err(error: StoreError, session_id: &str) -> SessionRepositoryError {
         | StoreError::MigrationFailed(message)
         | StoreError::ConstraintViolation(message)
         | StoreError::Conflict(message)
+        | StoreError::RuleConflict { message, .. }
         | StoreError::OpenFailed(message) => SessionRepositoryError::Storage { message },
     }
 }
@@ -347,6 +274,7 @@ fn on_update_err(error: StoreError, session_id: &str) -> SessionRepositoryError 
             session_id: session_id.to_string(),
         },
         StoreError::Conflict(message) => SessionRepositoryError::Conflict { message },
+        StoreError::RuleConflict { message, .. } => SessionRepositoryError::Conflict { message },
         StoreError::ConstraintViolation(message)
         | StoreError::BusyTimeout(message)
         | StoreError::Internal(message)

@@ -1,7 +1,5 @@
-pub mod errors;
-pub mod services;
+mod session_service;
 
-pub use errors::SessionAppError;
-pub use services::{
+pub use session_service::{
     CreateSessionInput, CreateSessionWrite, SessionAppService, SessionConfig, SessionWritePort,
 };

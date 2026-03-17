@@ -15,8 +15,7 @@ pub struct SessionLease {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Session {
     pub session_id: String,
-    pub actor_id: String,
-    pub agent_id: String,
+    pub agent_name: String,
     pub policy_profile: String,
     pub status: SessionStatus,
     pub lease: SessionLease,
@@ -28,8 +27,7 @@ pub struct Session {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewSession {
     pub session_id: String,
-    pub actor_id: String,
-    pub agent_id: String,
+    pub agent_name: String,
     pub policy_profile: String,
     pub lease: SessionLease,
     pub created_at_ms: u64,

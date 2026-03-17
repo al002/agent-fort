@@ -24,8 +24,7 @@ const MIGRATIONS: &[Migration] = &[Migration {
     sql: r#"
 CREATE TABLE IF NOT EXISTS sessions (
   session_id TEXT PRIMARY KEY,
-  actor_id TEXT NOT NULL,
-  agent_id TEXT NOT NULL,
+  agent_name TEXT NOT NULL,
   policy_profile TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'EXPIRED', 'TERMINATED')),
   client_instance_id TEXT NOT NULL,
@@ -37,8 +36,8 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_status_expires
   ON sessions(status, lease_expires_at_ms);
-CREATE INDEX IF NOT EXISTS idx_sessions_actor_status
-  ON sessions(actor_id, status);
+CREATE INDEX IF NOT EXISTS idx_sessions_agent_name_status
+  ON sessions(agent_name, status);
 
 CREATE TABLE IF NOT EXISTS tasks (
   task_id TEXT PRIMARY KEY,

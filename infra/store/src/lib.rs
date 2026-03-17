@@ -3,7 +3,10 @@ mod migrations;
 mod repo_approval;
 mod repo_audit;
 mod repo_session;
+mod repo_session_tx;
 mod repo_task;
+mod sql_audit;
+mod sql_session;
 mod worker;
 
 #[cfg(test)]
@@ -122,6 +125,8 @@ pub enum StoreError {
     NotFound(String),
     #[error("store conflict: {0}")]
     Conflict(String),
+    #[error("store rule conflict ({code}): {message}")]
+    RuleConflict { code: &'static str, message: String },
     #[error("sqlite busy timeout: {0}")]
     BusyTimeout(String),
     #[error("store internal error: {0}")]
@@ -164,6 +169,7 @@ pub(crate) fn storage_msg(error: StoreError) -> String {
         StoreError::ConstraintViolation(message)
         | StoreError::NotFound(message)
         | StoreError::Conflict(message)
+        | StoreError::RuleConflict { message, .. }
         | StoreError::BusyTimeout(message)
         | StoreError::Internal(message)
         | StoreError::MigrationFailed(message)

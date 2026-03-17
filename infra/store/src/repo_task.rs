@@ -388,6 +388,7 @@ fn on_create_err(error: StoreError, session_id: &str, task_id: &str) -> TaskRepo
             }
         }
         StoreError::Conflict(message) => TaskRepositoryError::Conflict { message },
+        StoreError::RuleConflict { message, .. } => TaskRepositoryError::Conflict { message },
         StoreError::NotFound(_) => TaskRepositoryError::NotFound {
             session_id: session_id.to_string(),
             task_id: task_id.to_string(),
@@ -407,6 +408,7 @@ fn on_lookup_err(error: StoreError, session_id: &str, task_id: &str) -> TaskRepo
         },
         StoreError::ConstraintViolation(message)
         | StoreError::Conflict(message)
+        | StoreError::RuleConflict { message, .. }
         | StoreError::BusyTimeout(message)
         | StoreError::Internal(message)
         | StoreError::MigrationFailed(message)
@@ -421,6 +423,7 @@ fn on_update_err(error: StoreError, session_id: &str, task_id: &str) -> TaskRepo
             task_id: task_id.to_string(),
         },
         StoreError::Conflict(message) => TaskRepositoryError::Conflict { message },
+        StoreError::RuleConflict { message, .. } => TaskRepositoryError::Conflict { message },
         StoreError::ConstraintViolation(message)
         | StoreError::BusyTimeout(message)
         | StoreError::Internal(message)

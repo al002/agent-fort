@@ -5,7 +5,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use af_rpc_proto::codec::{decode_message, encode_message};
-use af_rpc_proto::{PingRequest, PingResponse};
+use af_rpc_proto::{PingRequest, PingResponse, RpcMethod, RpcRequest, RpcResponse, rpc_response};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
@@ -85,11 +85,28 @@ fn ping_once(endpoint: &str) -> Result<PingResponse> {
     let mut stream = connect_endpoint(endpoint)?;
     set_io_timeout(&mut stream)?;
 
-    let payload = encode_message(&PingRequest {});
-    write_frame(&mut stream, &payload)?;
+    let request_payload = encode_message(&PingRequest {});
+    let request = RpcRequest {
+        method: RpcMethod::Ping as i32,
+        payload: request_payload,
+    };
+    let request_bytes = encode_message(&request);
+    write_frame(&mut stream, &request_bytes)?;
+
     let response_bytes = read_frame(&mut stream)?;
-    let response = decode_message::<PingResponse>(&response_bytes)?;
-    Ok(response)
+    let response = decode_message::<RpcResponse>(&response_bytes)?;
+    match response.outcome {
+        Some(rpc_response::Outcome::Payload(payload)) => decode_message::<PingResponse>(&payload)
+            .map_err(|error| anyhow::anyhow!("decode PingResponse failed: {error}")),
+        Some(rpc_response::Outcome::Error(error)) => {
+            bail!(
+                "daemon ping error code={} message={}",
+                error.code,
+                error.message
+            )
+        }
+        None => bail!("daemon ping returned empty outcome"),
+    }
 }
 
 #[cfg(unix)]

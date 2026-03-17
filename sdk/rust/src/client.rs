@@ -11,9 +11,19 @@ use crate::runtime::RuntimeClient;
 use crate::session::SessionClient;
 use crate::task::TaskClient;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SdkConfig {
     pub bootstrap: BootstrapConfig,
+    pub agent_name: String,
+}
+
+impl SdkConfig {
+    pub fn new(agent_name: impl Into<String>) -> Self {
+        Self {
+            bootstrap: BootstrapConfig::default(),
+            agent_name: agent_name.into(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -54,10 +64,15 @@ impl AgentFortClient {
             .map_err(|error| SdkError::BootstrapTaskJoin(error.to_string()))?
     }
 
-    pub async fn connect_with_bootstrap(bootstrap_result: BootstrapRunResult) -> Result<Self> {
-        let runtime = RuntimeClient::connect(&bootstrap_result.start.endpoint).await?;
+    pub async fn connect_with_bootstrap(
+        bootstrap_result: BootstrapRunResult,
+        config: SdkConfig,
+    ) -> Result<Self> {
+        let runtime =
+            RuntimeClient::connect(&bootstrap_result.start.endpoint, config.agent_name.clone())
+                .await?;
         Ok(Self {
-            config: SdkConfig::default(),
+            config,
             runtime: Some(runtime),
             bootstrap_result: Some(bootstrap_result),
         })
@@ -142,7 +157,7 @@ impl AgentFortClient {
         }
 
         let endpoint = self.configured_endpoint_uri();
-        match RuntimeClient::connect(&endpoint).await {
+        match RuntimeClient::connect(&endpoint, self.config.agent_name.clone()).await {
             Ok(runtime) => {
                 self.runtime = Some(runtime);
                 return Ok(());
@@ -156,7 +171,8 @@ impl AgentFortClient {
         }
 
         let start = Self::bootstrap_start(self.config.bootstrap.clone()).await?;
-        let runtime = RuntimeClient::connect(&start.endpoint).await?;
+        let runtime =
+            RuntimeClient::connect(&start.endpoint, self.config.agent_name.clone()).await?;
         self.runtime = Some(runtime);
         Ok(())
     }

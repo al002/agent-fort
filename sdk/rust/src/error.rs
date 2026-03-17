@@ -43,6 +43,12 @@ pub enum SdkError {
     #[error("transport error: {0}")]
     Transport(#[from] af_rpc_transport::TransportError),
 
+    #[error("daemon rpc error ({code}): {message}")]
+    DaemonRpc { code: String, message: String },
+
+    #[error("protocol error: {0}")]
+    Protocol(String),
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 

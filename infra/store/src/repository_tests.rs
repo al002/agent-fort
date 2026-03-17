@@ -1,8 +1,11 @@
+use std::sync::Arc;
+
 use af_approval::{
     ApprovalDecision, ApprovalRepository, ApprovalRepositoryError, ApprovalStatus,
     ListPendingApprovalsQuery, NewApproval, RespondApprovalCommand,
 };
 use af_audit::{AuditCursor, AuditEventType, AuditRepository, NewAuditEvent};
+use af_core::{CreateSessionInput, SessionAppService, SessionConfig};
 use af_session::{
     NewSession, RenewLeaseCommand, SessionLease, SessionRepository, SessionStatus,
     TerminateSessionCommand,
@@ -299,12 +302,49 @@ fn audit_repository_append_and_query() {
     assert_eq!(by_task.len(), 2);
 }
 
+#[test]
+fn create_session_service_writes_session_and_audit_atomically() {
+    let store = Arc::new(Store::open(StoreOptions::in_memory()).expect("open in-memory store"));
+    let service = SessionAppService::new(
+        store.clone(),
+        SessionConfig {
+            default_lease_ttl_secs: 120,
+        },
+    );
+
+    let created = service
+        .create_session(CreateSessionInput {
+            agent_name: "agent-1".to_string(),
+            policy_profile: "default".to_string(),
+            client_instance_id: "client-1".to_string(),
+            lease_ttl_secs: Some(30),
+        })
+        .expect("create session");
+    assert_eq!(created.status, SessionStatus::Active);
+
+    let fetched = store
+        .get_session(&created.session_id)
+        .expect("fetch created session");
+    assert_eq!(fetched.session_id, created.session_id);
+
+    let events = store
+        .list_by_session(
+            &created.session_id,
+            AuditCursor {
+                after_seq: None,
+                limit: 10,
+            },
+        )
+        .expect("list session audit events");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event_type, AuditEventType::SessionCreated);
+}
+
 fn create_base_session(store: &Store, session_id: &str) {
     store
         .create_session(NewSession {
             session_id: session_id.to_string(),
-            actor_id: "actor-1".to_string(),
-            agent_id: "agent-1".to_string(),
+            agent_name: "agent-1".to_string(),
             policy_profile: "default".to_string(),
             lease: SessionLease {
                 client_instance_id: "client-1".to_string(),

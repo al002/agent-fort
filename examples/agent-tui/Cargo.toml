@@ -1,0 +1,11 @@
+[package]
+name = "af-example-agent-tui"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+af-sdk = { path = "../../sdk/rust" }
+crossterm = "0.29"
+ratatui = "0.29"
+tokio = { workspace = true }

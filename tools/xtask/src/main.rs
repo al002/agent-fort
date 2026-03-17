@@ -246,6 +246,7 @@ fn run_package(args: &[String]) -> Result<()> {
 
     match args[0].as_str() {
         "bundle" => build_runtime_bundle(&args[1..]),
+        "af-bootstrap" => build_sdk_af_bootstrap_binary(&args[1..]),
         "help" | "--help" | "-h" => {
             print_package_usage();
             Ok(())
@@ -364,6 +365,54 @@ impl PackageBundleArgs {
     }
 }
 
+#[derive(Debug, Default)]
+struct PackageAfBootstrapArgs {
+    target: Option<String>,
+    profile: Option<BuildProfile>,
+    output_dir: Option<PathBuf>,
+    af_bootstrap_path: Option<PathBuf>,
+    skip_build: bool,
+}
+
+impl PackageAfBootstrapArgs {
+    fn parse(args: &[String]) -> Result<Self> {
+        let mut parsed = Self::default();
+        let mut i = 0usize;
+        while i < args.len() {
+            match args[i].as_str() {
+                "--target" => {
+                    let (value, next) = parse_option_value(args, i, "--target")?;
+                    parsed.target = Some(value);
+                    i = next;
+                }
+                "--profile" => {
+                    let (value, next) = parse_option_value(args, i, "--profile")?;
+                    parsed.profile = Some(BuildProfile::parse(&value)?);
+                    i = next;
+                }
+                "--output-dir" => {
+                    let (value, next) = parse_option_value(args, i, "--output-dir")?;
+                    parsed.output_dir = Some(PathBuf::from(value));
+                    i = next;
+                }
+                "--af-bootstrap-path" => {
+                    let (value, next) = parse_option_value(args, i, "--af-bootstrap-path")?;
+                    parsed.af_bootstrap_path = Some(PathBuf::from(value));
+                    i = next;
+                }
+                "--skip-build" => {
+                    parsed.skip_build = true;
+                    i += 1;
+                }
+                other => {
+                    bail!("unknown option for `package af-bootstrap`: `{other}`");
+                }
+            }
+        }
+        Ok(parsed)
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct BootstrapSyncManifest {
     version: String,
@@ -393,7 +442,7 @@ fn build_runtime_bundle(args: &[String]) -> Result<()> {
     let version = parsed.version.unwrap_or_else(default_runtime_version);
     let output_dir = parsed
         .output_dir
-        .unwrap_or_else(|| root.join("assets").join("bootstrap").join(&target));
+        .unwrap_or_else(|| root.join("assets").join("agent-fortd").join(&target));
     let bundle_name = parsed
         .bundle_name
         .unwrap_or_else(|| DEFAULT_RUNTIME_BUNDLE_FILE.to_string());
@@ -446,6 +495,78 @@ fn build_runtime_bundle(args: &[String]) -> Result<()> {
     println!("manifest: {}", manifest_path.display());
     println!("bundle sha256: {bundle_sha256}");
     Ok(())
+}
+
+fn build_sdk_af_bootstrap_binary(args: &[String]) -> Result<()> {
+    if has_flag(args, "--help") || has_flag(args, "-h") {
+        print_package_af_bootstrap_usage();
+        return Ok(());
+    }
+
+    let parsed = PackageAfBootstrapArgs::parse(args)?;
+    let root = repo_root()?;
+    let target = parsed.target.unwrap_or_else(machine_target_label);
+    let profile = parsed.profile.unwrap_or(BuildProfile::Release);
+    let output_dir = parsed
+        .output_dir
+        .unwrap_or_else(|| root.join("assets").join("af-bootstrap").join(&target));
+    let binary_name = binary_file_name("af-bootstrap");
+    let output_binary_path = output_dir.join(&binary_name);
+
+    fs::create_dir_all(&output_dir)
+        .with_context(|| format!("failed to create {}", output_dir.display()))?;
+
+    if !parsed.skip_build {
+        build_af_bootstrap_binary(&root, profile)?;
+    }
+
+    let bootstrap_binary = parsed
+        .af_bootstrap_path
+        .unwrap_or_else(|| binary_output_path(&root, profile, "af-bootstrap"));
+    ensure_packaging_input(&bootstrap_binary, "af-bootstrap binary")?;
+
+    fs::copy(&bootstrap_binary, &output_binary_path).with_context(|| {
+        format!(
+            "failed to copy bootstrap binary from {} to {}",
+            bootstrap_binary.display(),
+            output_binary_path.display()
+        )
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&output_binary_path, fs::Permissions::from_mode(0o755)).with_context(
+            || {
+                format!(
+                    "failed to set permissions for {}",
+                    output_binary_path.display()
+                )
+            },
+        )?;
+    }
+
+    let binary_sha256 = sha256_hex_file(&output_binary_path)?;
+    let binary_sha_path = output_dir.join(format!("{binary_name}.sha256"));
+    fs::write(
+        &binary_sha_path,
+        format!("{binary_sha256}  {binary_name}\n"),
+    )
+    .with_context(|| format!("failed to write {}", binary_sha_path.display()))?;
+
+    println!("sdk af-bootstrap binary: {}", output_binary_path.display());
+    println!("binary sha256: {binary_sha256}");
+    Ok(())
+}
+
+fn build_af_bootstrap_binary(root: &Path, profile: BuildProfile) -> Result<()> {
+    let mut build = Command::new("cargo");
+    build
+        .arg("build")
+        .arg("--package")
+        .arg("af-bootstrap")
+        .current_dir(root);
+    profile.apply_to_command(&mut build);
+    run_checked(&mut build, "build af-bootstrap binary")
 }
 
 fn parse_option_value(args: &[String], index: usize, option: &str) -> Result<(String, usize)> {
@@ -882,7 +1003,7 @@ fn print_usage() {
     eprintln!("  cargo xtask codegen <check-rust-proto>");
     eprintln!("  cargo xtask dev <fmt|lint|test|integration|all>");
     eprintln!("  cargo xtask bwrap <build|verify> [options]");
-    eprintln!("  cargo xtask package <bundle> [options]");
+    eprintln!("  cargo xtask package <bundle|af-bootstrap> [options]");
 }
 
 fn print_proto_usage() {
@@ -918,19 +1039,22 @@ fn print_bwrap_usage() {
 fn print_package_usage() {
     eprintln!("Usage:");
     eprintln!("  cargo xtask package bundle [options]");
+    eprintln!("  cargo xtask package af-bootstrap [options]");
     eprintln!();
     print_package_bundle_usage();
+    eprintln!();
+    print_package_af_bootstrap_usage();
 }
 
 fn print_package_bundle_usage() {
     eprintln!("Options for `cargo xtask package bundle`:");
     eprintln!(
-        "  (bundle entries: agent-fortd, bwrap, helper; bootstrap is distributed separately)"
+        "  (bundle entries: agent-fortd, bwrap, helper; af-bootstrap is distributed separately)"
     );
     eprintln!("  --target <label>         Bundle target label (default: current os-arch)");
     eprintln!("  --profile <debug|release> Cargo build profile (default: release)");
     eprintln!("  --version <version>      Manifest version string (default: dev-<unix_s>)");
-    eprintln!("  --output-dir <path>      Output directory (default: assets/bootstrap/<target>)");
+    eprintln!("  --output-dir <path>      Output directory (default: assets/agent-fortd/<target>)");
     eprintln!(
         "  --bwrap-path <path>      bwrap binary path (default: assets/bwrap/<target>/bwrap)"
     );
@@ -940,5 +1064,20 @@ fn print_package_bundle_usage() {
     eprintln!("  --bundle-name <name>     Bundle file name (default: bundle.tar.gz)");
     eprintln!("  --manifest-name <name>   Manifest file name (default: manifest.json)");
     eprintln!("  --skip-build             Skip cargo build and package existing binaries");
+    eprintln!("  -h, --help");
+}
+
+fn print_package_af_bootstrap_usage() {
+    eprintln!("Options for `cargo xtask package af-bootstrap`:");
+    eprintln!("  (outputs: af-bootstrap[.exe], af-bootstrap[.exe].sha256)");
+    eprintln!("  --target <label>         Output target label (default: current os-arch)");
+    eprintln!("  --profile <debug|release> Cargo build profile (default: release)");
+    eprintln!(
+        "  --output-dir <path>      Output directory (default: assets/af-bootstrap/<target>)"
+    );
+    eprintln!(
+        "  --af-bootstrap-path <path> af-bootstrap binary path (default: target/<profile>/af-bootstrap)"
+    );
+    eprintln!("  --skip-build             Skip cargo build and package existing binary");
     eprintln!("  -h, --help");
 }

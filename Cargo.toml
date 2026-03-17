@@ -3,9 +3,11 @@ resolver = "2"
 members = [
     "apps/*",
     "core",
+    "examples/*",
     "protocol/*",
     "domain/*",
     "infra/*",
+    "sdk/rust",
     "tools/xtask",
 ]
 

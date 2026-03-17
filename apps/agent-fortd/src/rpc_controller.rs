@@ -120,7 +120,6 @@ impl RpcController {
             .session_service
             .create_session(CreateSessionInput {
                 agent_name: request.agent_name,
-                policy_profile: request.policy_profile,
                 client_instance_id: request.client_instance_id,
                 lease_ttl_secs: request.lease_ttl_secs,
             });
@@ -161,7 +160,6 @@ fn to_proto_session(session: af_session::Session) -> Session {
     Session {
         session_id: session.session_id,
         agent_name: session.agent_name,
-        policy_profile: session.policy_profile,
         status: match session.status {
             af_session::SessionStatus::Active => SessionStatus::Active as i32,
             af_session::SessionStatus::Expired => SessionStatus::Expired as i32,
@@ -190,7 +188,6 @@ mod tests {
         let controller = RpcController::new("daemon-1".to_string(), store.clone());
         let request = CreateSessionRequest {
             agent_name: "agent-1".to_string(),
-            policy_profile: "default".to_string(),
             client_instance_id: "client-1".to_string(),
             lease_ttl_secs: Some(30),
         };

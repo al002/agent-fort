@@ -315,7 +315,6 @@ fn create_session_service_writes_session_and_audit_atomically() {
     let created = service
         .create_session(CreateSessionInput {
             agent_name: "agent-1".to_string(),
-            policy_profile: "default".to_string(),
             client_instance_id: "client-1".to_string(),
             lease_ttl_secs: Some(30),
         })
@@ -345,7 +344,6 @@ fn create_base_session(store: &Store, session_id: &str) {
         .create_session(NewSession {
             session_id: session_id.to_string(),
             agent_name: "agent-1".to_string(),
-            policy_profile: "default".to_string(),
             lease: SessionLease {
                 client_instance_id: "client-1".to_string(),
                 rebind_token: "token-1".to_string(),

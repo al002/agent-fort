@@ -23,6 +23,7 @@ uuid = { version = "1.22", features = ["v4", "serde"] }
 libc = "0.2"
 rusqlite = { version = "0.38", features = ["bundled"] }
 prost = "0.14"
+prost-types = "0.14"
 
 [profile.release]
 opt-level = "z"

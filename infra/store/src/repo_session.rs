@@ -58,14 +58,13 @@ fn insert_session(connection: &mut Connection, command: NewSession) -> StoreResu
     connection
         .execute(
             "INSERT INTO sessions (
-               session_id, agent_name, policy_profile, status,
+               session_id, agent_name, status,
                client_instance_id, rebind_token, lease_expires_at_ms,
                created_at_ms, updated_at_ms, terminated_at_ms
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL)",
             params![
                 command.session_id,
                 command.agent_name,
-                command.policy_profile,
                 session_status_to_db(SessionStatus::Active),
                 command.lease.client_instance_id,
                 command.lease.rebind_token,
@@ -151,7 +150,6 @@ fn list_expired(connection: &mut Connection, now_ms: u64, limit: u32) -> StoreRe
             "SELECT
                session_id,
                agent_name,
-               policy_profile,
                status,
                client_instance_id,
                rebind_token,
@@ -189,7 +187,6 @@ fn load_session(connection: &Connection, session_id: &str) -> StoreResult<Option
             "SELECT
                session_id,
                agent_name,
-               policy_profile,
                status,
                client_instance_id,
                rebind_token,

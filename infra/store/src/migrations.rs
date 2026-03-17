@@ -25,7 +25,6 @@ const MIGRATIONS: &[Migration] = &[Migration {
 CREATE TABLE IF NOT EXISTS sessions (
   session_id TEXT PRIMARY KEY,
   agent_name TEXT NOT NULL,
-  policy_profile TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'EXPIRED', 'TERMINATED')),
   client_instance_id TEXT NOT NULL,
   rebind_token TEXT NOT NULL,

@@ -4,9 +4,9 @@ package agent.fort.v1;
 
 import "agent/fort/v1/approval.proto";
 import "agent/fort/v1/common.proto";
-import "agent/fort/v1/policy.proto";
 import "agent/fort/v1/session.proto";
 import "agent/fort/v1/task.proto";
+import "google/protobuf/struct.proto";
 
 enum RpcMethod {
   RPC_METHOD_UNSPECIFIED = 0;
@@ -24,10 +24,6 @@ enum RpcMethod {
   RPC_METHOD_LIST_PENDING_APPROVALS = 12;
   RPC_METHOD_GET_APPROVAL = 13;
   RPC_METHOD_RESPOND_APPROVAL = 14;
-  RPC_METHOD_GET_POLICY_STATE = 15;
-  RPC_METHOD_EVALUATE_POLICY = 16;
-  RPC_METHOD_AMEND_POLICY_FILE = 17;
-  RPC_METHOD_RELOAD_POLICY = 18;
 }
 
 message RpcRequest {
@@ -55,15 +51,20 @@ message GetDaemonInfoResponse {
   DaemonInfo info = 1;
 }
 
+message OperationRequest {
+  string kind = 1;
+  google.protobuf.Struct payload = 2;
+  google.protobuf.Struct options = 3;
+  map<string, string> labels = 4;
+}
+
 message InvokeRequest {
   string session_id = 1;
   string client_instance_id = 2;
   string rebind_token = 3;
-  string capability = 4;
-  string operation = 5;
-  string input_json = 6;
-  optional string goal = 7;
-  optional string limits_json = 8;
+  OperationRequest operation = 4;
+  optional string goal = 5;
+  optional string limits_json = 6;
 }
 
 message InvokeResponse {
@@ -85,8 +86,4 @@ service AgentFortService {
   rpc ListPendingApprovals(ListPendingApprovalsRequest) returns (ListPendingApprovalsResponse);
   rpc GetApproval(GetApprovalRequest) returns (GetApprovalResponse);
   rpc RespondApproval(RespondApprovalRequest) returns (RespondApprovalResponse);
-  rpc GetPolicyState(GetPolicyStateRequest) returns (GetPolicyStateResponse);
-  rpc EvaluatePolicy(EvaluatePolicyRequest) returns (EvaluatePolicyResponse);
-  rpc AmendPolicyFile(AmendPolicyFileRequest) returns (AmendPolicyFileResponse);
-  rpc ReloadPolicy(ReloadPolicyRequest) returns (ReloadPolicyResponse);
 }

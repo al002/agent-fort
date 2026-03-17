@@ -25,7 +25,6 @@ impl Default for SessionConfig {
 #[derive(Debug, Clone)]
 pub struct CreateSessionInput {
     pub agent_name: String,
-    pub policy_profile: String,
     pub client_instance_id: String,
     pub lease_ttl_secs: Option<u64>,
 }
@@ -62,7 +61,6 @@ impl SessionAppService {
 
     pub fn create_session(&self, input: CreateSessionInput) -> Result<Session, SessionAppError> {
         validate_non_empty("agent_name", &input.agent_name)?;
-        validate_non_empty("policy_profile", &input.policy_profile)?;
         validate_non_empty("client_instance_id", &input.client_instance_id)?;
 
         let ttl_secs = input
@@ -92,7 +90,6 @@ impl SessionAppService {
             session: NewSession {
                 session_id: session_id.clone(),
                 agent_name: input.agent_name,
-                policy_profile: input.policy_profile,
                 lease: SessionLease {
                     client_instance_id: input.client_instance_id,
                     rebind_token: Uuid::new_v4().to_string(),
@@ -148,7 +145,6 @@ mod tests {
             Ok(Session {
                 session_id: write.session.session_id,
                 agent_name: write.session.agent_name,
-                policy_profile: write.session.policy_profile,
                 status: SessionStatus::Active,
                 lease: write.session.lease,
                 created_at_ms: write.session.created_at_ms,
@@ -168,7 +164,6 @@ mod tests {
         );
         let result = service.create_session(CreateSessionInput {
             agent_name: " ".to_string(),
-            policy_profile: "default".to_string(),
             client_instance_id: "client".to_string(),
             lease_ttl_secs: Some(10),
         });
@@ -186,7 +181,6 @@ mod tests {
         let session = service
             .create_session(CreateSessionInput {
                 agent_name: "agent".to_string(),
-                policy_profile: "default".to_string(),
                 client_instance_id: "client".to_string(),
                 lease_ttl_secs: None,
             })
@@ -199,7 +193,6 @@ mod tests {
         let service = SessionAppService::new(Arc::new(StubPort), SessionConfig::default());
         let result = service.create_session(CreateSessionInput {
             agent_name: "agent".to_string(),
-            policy_profile: "default".to_string(),
             client_instance_id: "client".to_string(),
             lease_ttl_secs: Some(0),
         });

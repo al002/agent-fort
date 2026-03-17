@@ -11,7 +11,6 @@ fn main() {
         proto_root.join("agent/fort/v1/session.proto"),
         proto_root.join("agent/fort/v1/task.proto"),
         proto_root.join("agent/fort/v1/approval.proto"),
-        proto_root.join("agent/fort/v1/policy.proto"),
         proto_root.join("agent/fort/v1/audit.proto"),
     ];
 

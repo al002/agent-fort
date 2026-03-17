@@ -3,7 +3,6 @@ syntax = "proto3";
 package agent.fort.v1;
 
 import "agent/fort/v1/common.proto";
-import "agent/fort/v1/policy.proto";
 import "agent/fort/v1/task.proto";
 
 enum ApprovalDecision {
@@ -12,27 +11,26 @@ enum ApprovalDecision {
   APPROVAL_DECISION_DENY = 2;
 }
 
+message ApprovalItem {
+  string kind = 1;
+  string target = 2;
+  string summary = 3;
+}
+
 message Approval {
   string approval_id = 1;
   string session_id = 2;
   string task_id = 3;
   string trace_id = 4;
-  string capability = 5;
-  string operation = 6;
-  ApprovalStatus status = 7;
-  string policy_reason = 8;
-  string risk_class = 9;
-  string command_class = 10;
-  string input_brief_json = 11;
-  string requested_runtime_class = 12;
-  string resolved_runtime_class = 13;
-  bool requires_network = 14;
-  bool requires_pty = 15;
-  uint64 created_at_ms = 16;
-  uint64 expires_at_ms = 17;
-  optional uint64 responded_at_ms = 18;
-  optional string response_reason = 19;
-  optional string response_idempotency_key = 20;
+  ApprovalStatus status = 5;
+  string summary = 6;
+  repeated ApprovalItem items = 7;
+  optional string details = 8;
+  uint64 created_at_ms = 9;
+  uint64 expires_at_ms = 10;
+  optional uint64 responded_at_ms = 11;
+  optional string response_reason = 12;
+  optional string response_idempotency_key = 13;
 }
 
 message ApprovalSummary {
@@ -40,9 +38,7 @@ message ApprovalSummary {
   ApprovalStatus status = 2;
   uint64 expires_at_ms = 3;
   string task_id = 4;
-  string capability = 5;
-  string operation = 6;
-  string policy_reason = 7;
+  string summary = 5;
 }
 
 message PendingApproval {
@@ -50,25 +46,25 @@ message PendingApproval {
   ApprovalStatus status = 2;
   uint64 expires_at_ms = 3;
   string task_id = 4;
-  string capability = 5;
-  string operation = 6;
-  string policy_reason = 7;
+  string summary = 5;
+}
+
+message ExecutionResult {
+  string state = 1;
+  optional int32 exit_code = 2;
+  bool timed_out = 3;
+  string stdout = 4;
+  string stderr = 5;
+  bool stdout_truncated = 6;
+  bool stderr_truncated = 7;
 }
 
 message InvokeResult {
   Task task = 1;
-  string capability = 2;
-  string operation = 3;
-  string runtime_class = 4;
-  PolicyDecision decision = 5;
-  string execution_state = 6;
-  optional int32 exit_code = 7;
-  bool timed_out = 8;
-  string stdout = 9;
-  string stderr = 10;
-  bool stdout_truncated = 11;
-  bool stderr_truncated = 12;
-  optional PendingApproval approval = 13;
+  oneof outcome {
+    ExecutionResult execution = 2;
+    PendingApproval approval = 3;
+  }
 }
 
 message ListPendingApprovalsRequest {

@@ -11,7 +11,6 @@ use crate::error::{Result, SdkError};
 #[derive(Debug, Clone)]
 pub struct CreateSessionOptions {
     pub agent_name: Option<String>,
-    pub policy_profile: Option<String>,
     pub lease_ttl_secs: Option<u64>,
 }
 
@@ -19,7 +18,6 @@ impl Default for CreateSessionOptions {
     fn default() -> Self {
         Self {
             agent_name: None,
-            policy_profile: None,
             lease_ttl_secs: None,
         }
     }
@@ -29,7 +27,6 @@ impl CreateSessionOptions {
     pub fn with_agent_name(agent_name: impl Into<String>) -> Self {
         Self {
             agent_name: Some(agent_name.into()),
-            policy_profile: None,
             lease_ttl_secs: None,
         }
     }
@@ -78,9 +75,6 @@ impl RuntimeClient {
             agent_name: options
                 .agent_name
                 .unwrap_or_else(|| self.session_agent_name.clone()),
-            policy_profile: options
-                .policy_profile
-                .unwrap_or_else(|| "default".to_string()),
             client_instance_id: self.client_instance_id.clone(),
             lease_ttl_secs: options.lease_ttl_secs.or(Some(300)),
         };

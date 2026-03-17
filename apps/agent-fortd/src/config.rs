@@ -11,6 +11,7 @@ const ENV_HELPER_PATH: &str = "AF_HELPER_PATH";
 const ENV_BWRAP_PATH: &str = "AF_BWRAP_PATH";
 const ENV_CGROUP_ROOT: &str = "AF_CGROUP_ROOT";
 const ENV_STORE_PATH: &str = "AF_STORE_PATH";
+const ENV_POLICY_DIR: &str = "AF_POLICY_DIR";
 const DEFAULT_DAEMON_ENDPOINT: &str = "/tmp/agent-fortd.sock";
 const DEFAULT_BWRAP_PATH: &str = "/usr/bin/bwrap";
 const DEFAULT_HELPER_PATH: &str = "helper";
@@ -23,6 +24,7 @@ pub struct DaemonConfig {
     pub bwrap_path: PathBuf,
     pub cgroup_root: PathBuf,
     pub store_path: PathBuf,
+    pub policy_dir: PathBuf,
 }
 
 impl DaemonConfig {
@@ -46,6 +48,11 @@ impl DaemonConfig {
         let store_path = env::var(ENV_STORE_PATH)
             .map(PathBuf::from)
             .unwrap_or_else(|_| default_store_path());
+        let policy_dir = resolve_policy_dir(
+            env::var(ENV_POLICY_DIR)
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| default_policy_dir()),
+        )?;
 
         Ok(Self {
             endpoint,
@@ -54,12 +61,33 @@ impl DaemonConfig {
             bwrap_path,
             cgroup_root,
             store_path,
+            policy_dir,
         })
     }
 }
 
 fn default_store_path() -> PathBuf {
     std::env::temp_dir().join("agent-fortd.sqlite3")
+}
+
+fn default_policy_dir() -> PathBuf {
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("policies")
+}
+
+fn resolve_policy_dir(path: PathBuf) -> Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+
+    match absolute.canonicalize() {
+        Ok(path) => Ok(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(absolute),
+        Err(error) => Err(error.into()),
+    }
 }
 
 #[cfg(test)]
@@ -77,6 +105,16 @@ mod tests {
         assert_eq!(
             default_store_path(),
             std::env::temp_dir().join("agent-fortd.sqlite3")
+        );
+    }
+
+    #[test]
+    fn has_default_policy_dir_under_current_working_directory() {
+        assert_eq!(
+            default_policy_dir(),
+            std::env::current_dir()
+                .expect("current directory is available")
+                .join("policies")
         );
     }
 }

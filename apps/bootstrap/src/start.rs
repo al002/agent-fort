@@ -57,6 +57,7 @@ pub fn run(args: StartArgs) -> Result<StartOutput> {
         &endpoint,
         &state.bwrap_path,
         &state.helper_path,
+        args.policy_dir.as_deref(),
     )?;
     let deadline = Instant::now() + Duration::from_millis(args.startup_timeout_ms);
     let poll_interval = Duration::from_millis(args.ping_interval_ms.max(10));
@@ -181,14 +182,21 @@ fn spawn_daemon(
     endpoint: &str,
     bwrap_path: &Path,
     helper_path: &Path,
+    policy_dir: Option<&Path>,
 ) -> Result<u32> {
-    let child = Command::new(daemon_path)
+    let mut command = Command::new(daemon_path);
+    command
         .env("AF_DAEMON_ENDPOINT", endpoint)
         .env("AF_BWRAP_PATH", bwrap_path)
         .env("AF_HELPER_PATH", helper_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    if let Some(policy_dir) = policy_dir {
+        command.env("AF_POLICY_DIR", policy_dir);
+    }
+
+    let child = command
         .spawn()
         .with_context(|| format!("spawn daemon {}", daemon_path.display()))?;
     Ok(child.id())

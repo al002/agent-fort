@@ -1,0 +1,12 @@
+[package]
+name = "af-policy-infra"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+af-policy = { path = "../../domain/policy" }
+libc = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

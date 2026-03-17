@@ -1,14 +1,30 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+use std::path::PathBuf;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyFile {
+    pub absolute_path: PathBuf,
+    pub relative_path: String,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyDirectorySnapshot {
+    pub root: PathBuf,
+    pub files: Vec<PolicyFile>,
+}
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+impl PolicyDirectorySnapshot {
+    pub fn file_count(&self) -> usize {
+        self.files.len()
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyReloadReason {
+    FilesystemChange,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyReloadRequest {
+    pub root: PathBuf,
+    pub reason: PolicyReloadReason,
 }

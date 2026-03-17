@@ -18,6 +18,7 @@ const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_STARTUP_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_PING_INTERVAL_MS: u64 = 200;
 const DEFAULT_LOCAL_DEV_BOOTSTRAP_DIR: &str = "target/debug";
+const ENV_POLICY_DIR: &str = "AF_POLICY_DIR";
 const EXPECTED_BOOTSTRAP_SHA256_LINUX_X86_64: &str =
     "e935437defc54009b8cddbd8b946f9b1f5a20feb71cef5c0fdac32c4f6e3e0c3";
 
@@ -32,6 +33,7 @@ pub struct BootstrapConfig {
     pub install_root: Option<PathBuf>,
     pub bundle_manifest: Option<String>,
     pub endpoint: Option<String>,
+    pub policy_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +93,7 @@ struct ResolvedBootstrapConfig {
     install_root: PathBuf,
     bundle_manifest: Option<String>,
     endpoint: String,
+    policy_dir: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -154,11 +157,20 @@ impl BootstrapRunner {
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(default_local_bin);
 
+        let policy_dir = resolve_policy_dir(
+            self.config
+                .policy_dir
+                .clone()
+                .or_else(|| std::env::var_os(ENV_POLICY_DIR).map(PathBuf::from))
+                .unwrap_or_else(default_policy_dir),
+        )?;
+
         Ok(ResolvedBootstrapConfig {
             bootstrap_binary_url,
             install_root,
             bundle_manifest: self.config.bundle_manifest.clone(),
             endpoint,
+            policy_dir,
         })
     }
 }
@@ -248,6 +260,9 @@ fn build_start_args(config: &ResolvedBootstrapConfig) -> Vec<OsString> {
 
     args.push(OsString::from("--ping-interval-ms"));
     args.push(OsString::from(DEFAULT_PING_INTERVAL_MS.to_string()));
+
+    args.push(OsString::from("--policy-dir"));
+    args.push(config.policy_dir.as_os_str().to_owned());
     args
 }
 
@@ -600,6 +615,10 @@ pub fn default_install_root_path() -> PathBuf {
     default_install_root()
 }
 
+pub fn default_policy_dir_path() -> PathBuf {
+    default_policy_dir()
+}
+
 pub fn default_manifest_path(install_root: &Path) -> PathBuf {
     install_root_manifest_path(install_root)
 }
@@ -621,4 +640,24 @@ pub fn install_root_has_manifest(install_root: &Path) -> bool {
     fs::metadata(install_root_manifest_path(install_root))
         .map(|meta| meta.is_file())
         .unwrap_or(false)
+}
+
+fn default_policy_dir() -> PathBuf {
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("policies")
+}
+
+fn resolve_policy_dir(path: PathBuf) -> Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+
+    match absolute.canonicalize() {
+        Ok(path) => Ok(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(absolute),
+        Err(error) => Err(error.into()),
+    }
 }

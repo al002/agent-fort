@@ -37,6 +37,7 @@ pub struct StartArgs {
     pub daemon_path: Option<PathBuf>,
     pub bwrap_path: Option<PathBuf>,
     pub helper_path: Option<PathBuf>,
+    pub policy_dir: Option<PathBuf>,
 }
 
 pub enum ParseOutcome {
@@ -189,6 +190,7 @@ fn parse_start(args: &[String]) -> Result<ParseOutcome> {
         daemon_path: None,
         bwrap_path: None,
         helper_path: None,
+        policy_dir: None,
     };
 
     let mut i = 0usize;
@@ -233,6 +235,11 @@ fn parse_start(args: &[String]) -> Result<ParseOutcome> {
                 parsed.helper_path = Some(PathBuf::from(value));
                 i = next;
             }
+            "--policy-dir" => {
+                let (value, next) = parse_value(args, i, "--policy-dir")?;
+                parsed.policy_dir = Some(PathBuf::from(value));
+                i = next;
+            }
             other => bail!("unknown option for `start`: `{other}`"),
         }
     }
@@ -264,7 +271,7 @@ fn sync_help_text() -> String {
 }
 
 fn start_help_text() -> String {
-    "Usage: af-bootstrap start [OPTIONS]\n\nOptions:\n  --install-root <PATH>\n  --endpoint <ENDPOINT>\n  --startup-timeout-ms <MILLIS> (default: 10000)\n  --ping-interval-ms <MILLIS> (default: 200)\n  --daemon-path <PATH>\n  --bwrap-path <PATH>\n  --helper-path <PATH>\n  -h, --help"
+    "Usage: af-bootstrap start [OPTIONS]\n\nOptions:\n  --install-root <PATH>\n  --endpoint <ENDPOINT>\n  --startup-timeout-ms <MILLIS> (default: 10000)\n  --ping-interval-ms <MILLIS> (default: 200)\n  --daemon-path <PATH>\n  --bwrap-path <PATH>\n  --helper-path <PATH>\n  --policy-dir <PATH>\n  -h, --help"
         .to_string()
 }
 

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use af_policy_infra::{PolicyDirectoryRuntime, PolicyDirectorySourceConfig};
 use af_store::Store;
 use anyhow::Result;
 use tracing::info;
@@ -14,6 +15,7 @@ pub struct BootstrappedDaemon {
     config: DaemonConfig,
     server: DaemonServer,
     _helper_client: HelperClient,
+    _policy_runtime: PolicyDirectoryRuntime,
 }
 
 impl BootstrappedDaemon {
@@ -26,6 +28,15 @@ impl BootstrappedDaemon {
             applied_migrations = migration_report.applied_count,
             skipped_migrations = migration_report.skipped_count,
             "sqlite store ready"
+        );
+
+        let policy_runtime = PolicyDirectoryRuntime::start(PolicyDirectorySourceConfig::new(
+            config.policy_dir.clone(),
+        ))?;
+        info!(
+            policy_dir = %config.policy_dir.display(),
+            policy_files = policy_runtime.snapshot().file_count(),
+            "policy directory runtime ready"
         );
 
         let controller = RpcController::new(config.daemon_instance_id.clone(), Arc::new(store));
@@ -46,6 +57,7 @@ impl BootstrappedDaemon {
             config,
             server,
             _helper_client: helper_client,
+            _policy_runtime: policy_runtime,
         })
     }
 
@@ -56,6 +68,7 @@ impl BootstrappedDaemon {
             store_path = %self.config.store_path.display(),
             helper_path = %self.config.helper_path.display(),
             bwrap_path = %self.config.bwrap_path.display(),
+            policy_dir = %self.config.policy_dir.display(),
             "agent-fortd started"
         );
         self.server.run().await

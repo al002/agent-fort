@@ -7,6 +7,7 @@ edition = "2024"
 af-rpc-proto = { path = "../../protocol/rpc-proto" }
 af-rpc-transport = { path = "../../protocol/rpc-transport" }
 af-sandbox = { path = "../../infra/sandbox" }
+af-store = { path = "../../infra/store" }
 anyhow = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

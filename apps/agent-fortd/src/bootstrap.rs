@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use af_store::Store;
 use anyhow::Result;
 use tracing::info;
 
@@ -15,7 +18,17 @@ pub struct BootstrappedDaemon {
 
 impl BootstrappedDaemon {
     pub fn new(config: DaemonConfig) -> Result<Self> {
-        let controller = RpcController::new(config.daemon_instance_id.clone());
+        let store = Store::open_path(&config.store_path)?;
+        let migration_report = *store.startup_migration_report();
+        info!(
+            store_path = %config.store_path.display(),
+            schema_version = migration_report.current_version,
+            applied_migrations = migration_report.applied_count,
+            skipped_migrations = migration_report.skipped_count,
+            "sqlite store ready"
+        );
+
+        let controller = RpcController::new(config.daemon_instance_id.clone(), Arc::new(store));
         let daemon_info = controller.daemon_info();
         info!(
             daemon_instance_id = %config.daemon_instance_id,
@@ -40,6 +53,7 @@ impl BootstrappedDaemon {
         info!(
             daemon_instance_id = %self.config.daemon_instance_id,
             endpoint = %self.config.endpoint.as_uri(),
+            store_path = %self.config.store_path.display(),
             helper_path = %self.config.helper_path.display(),
             bwrap_path = %self.config.bwrap_path.display(),
             "agent-fortd started"

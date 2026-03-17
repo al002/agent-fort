@@ -29,7 +29,7 @@ message InvokeRequest {
   string operation = 5;
   string input_json = 6;
   optional string goal = 7;
-  optional string budget_json = 8;
+  optional string limits_json = 8;
 }
 
 message InvokeResponse {

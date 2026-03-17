@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use af_rpc_proto::{DaemonInfo, GetDaemonInfoResponse, PingRequest, PingResponse};
 use af_rpc_transport::RpcConnection;
+use af_store::Store;
 use anyhow::Result;
 
 #[derive(Debug, Clone)]
@@ -12,12 +13,16 @@ pub struct RpcController {
 #[derive(Debug)]
 struct ControllerState {
     daemon_instance_id: String,
+    store: Arc<Store>,
 }
 
 impl RpcController {
-    pub fn new(daemon_instance_id: String) -> Self {
+    pub fn new(daemon_instance_id: String, store: Arc<Store>) -> Self {
         Self {
-            state: Arc::new(ControllerState { daemon_instance_id }),
+            state: Arc::new(ControllerState {
+                daemon_instance_id,
+                store,
+            }),
         }
     }
 
@@ -35,6 +40,7 @@ impl RpcController {
         // Current transport carries one protobuf payload without method metadata.
         // The startup probe only needs Ping for daemon readiness.
         let _request: PingRequest = connection.read_message().await?;
+        self.state.store.ping()?;
 
         let response = PingResponse {
             status: "ok".to_string(),

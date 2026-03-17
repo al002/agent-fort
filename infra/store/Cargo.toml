@@ -4,3 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+rusqlite = { workspace = true }
+thiserror = { workspace = true }
+af-session = { path = "../../domain/session" }
+af-task = { path = "../../domain/task" }
+af-approval = { path = "../../domain/approval" }
+af-audit = { path = "../../domain/audit" }

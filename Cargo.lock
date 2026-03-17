@@ -11,10 +11,16 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 [[package]]
 name = "af-approval"
 version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
 
 [[package]]
 name = "af-audit"
 version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
 
 [[package]]
 name = "af-audit-sink"
@@ -118,11 +124,18 @@ dependencies = [
 [[package]]
 name = "af-session"
 version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
 
 [[package]]
 name = "af-store"
 version = "0.1.0"
 dependencies = [
+ "af-approval",
+ "af-audit",
+ "af-session",
+ "af-task",
  "rusqlite",
  "thiserror",
 ]
@@ -130,6 +143,9 @@ dependencies = [
 [[package]]
 name = "af-task"
 version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
 
 [[package]]
 name = "agent-fortd"
@@ -138,6 +154,7 @@ dependencies = [
  "af-rpc-proto",
  "af-rpc-transport",
  "af-sandbox",
+ "af-store",
  "anyhow",
  "serde_json",
  "tokio",

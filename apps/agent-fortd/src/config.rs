@@ -10,6 +10,7 @@ const ENV_DAEMON_INSTANCE_ID: &str = "AF_DAEMON_INSTANCE_ID";
 const ENV_HELPER_PATH: &str = "AF_HELPER_PATH";
 const ENV_BWRAP_PATH: &str = "AF_BWRAP_PATH";
 const ENV_CGROUP_ROOT: &str = "AF_CGROUP_ROOT";
+const ENV_STORE_PATH: &str = "AF_STORE_PATH";
 const DEFAULT_DAEMON_ENDPOINT: &str = "/tmp/agent-fortd.sock";
 const DEFAULT_BWRAP_PATH: &str = "/usr/bin/bwrap";
 const DEFAULT_HELPER_PATH: &str = "helper";
@@ -21,6 +22,7 @@ pub struct DaemonConfig {
     pub helper_path: PathBuf,
     pub bwrap_path: PathBuf,
     pub cgroup_root: PathBuf,
+    pub store_path: PathBuf,
 }
 
 impl DaemonConfig {
@@ -41,6 +43,9 @@ impl DaemonConfig {
         let cgroup_root = env::var(ENV_CGROUP_ROOT)
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("/sys/fs/cgroup"));
+        let store_path = env::var(ENV_STORE_PATH)
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| default_store_path());
 
         Ok(Self {
             endpoint,
@@ -48,8 +53,13 @@ impl DaemonConfig {
             helper_path,
             bwrap_path,
             cgroup_root,
+            store_path,
         })
     }
+}
+
+fn default_store_path() -> PathBuf {
+    std::env::temp_dir().join("agent-fortd.sqlite3")
 }
 
 #[cfg(test)]
@@ -60,5 +70,13 @@ mod tests {
     fn parses_default_endpoint() {
         let endpoint = Endpoint::parse(DEFAULT_DAEMON_ENDPOINT).expect("default endpoint is valid");
         assert_eq!(endpoint.as_uri(), "unix:///tmp/agent-fortd.sock");
+    }
+
+    #[test]
+    fn has_default_store_path_in_system_temp_dir() {
+        assert_eq!(
+            default_store_path(),
+            std::env::temp_dir().join("agent-fortd.sqlite3")
+        );
     }
 }

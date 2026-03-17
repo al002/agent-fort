@@ -23,7 +23,7 @@ message Approval {
   string policy_reason = 8;
   string risk_class = 9;
   string command_class = 10;
-  string input_summary_json = 11;
+  string input_brief_json = 11;
   string requested_runtime_class = 12;
   string resolved_runtime_class = 13;
   bool requires_network = 14;

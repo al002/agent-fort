@@ -25,7 +25,7 @@ message Task {
   optional string goal = 4;
   TaskCreatedBy created_by = 5;
   string trace_id = 6;
-  optional string budget_json = 7;
+  optional string limits_json = 7;
   uint32 current_step = 8;
   optional string error_code = 9;
   optional string error_message = 10;
@@ -39,7 +39,7 @@ message CreateTaskRequest {
   string client_instance_id = 2;
   string rebind_token = 3;
   optional string goal = 4;
-  optional string budget_json = 5;
+  optional string limits_json = 5;
 }
 
 message CreateTaskResponse {

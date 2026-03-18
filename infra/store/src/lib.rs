@@ -1,6 +1,7 @@
 mod db;
 mod migrations;
 mod repo_approval;
+mod repo_approval_tx;
 mod repo_audit;
 mod repo_session;
 mod repo_session_tx;

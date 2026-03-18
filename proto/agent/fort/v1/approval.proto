@@ -33,14 +33,6 @@ message Approval {
   optional string response_idempotency_key = 13;
 }
 
-message ApprovalSummary {
-  string approval_id = 1;
-  ApprovalStatus status = 2;
-  uint64 expires_at_ms = 3;
-  string task_id = 4;
-  string summary = 5;
-}
-
 message PendingApproval {
   string approval_id = 1;
   ApprovalStatus status = 2;
@@ -67,18 +59,6 @@ message InvokeResult {
   }
 }
 
-message ListPendingApprovalsRequest {
-  string session_id = 1;
-  string client_instance_id = 2;
-  string rebind_token = 3;
-  optional uint32 limit = 4;
-  optional string after = 5;
-}
-
-message ListPendingApprovalsResponse {
-  repeated ApprovalSummary approvals = 1;
-}
-
 message GetApprovalRequest {
   string session_id = 1;
   string approval_id = 2;
@@ -96,10 +76,8 @@ message RespondApprovalRequest {
   ApprovalDecision decision = 3;
   string idempotency_key = 4;
   optional string reason = 5;
-  bool wait_for_terminal = 6;
-  optional uint64 wait_timeout_ms = 7;
-  string client_instance_id = 8;
-  string rebind_token = 9;
+  string client_instance_id = 6;
+  string rebind_token = 7;
 }
 
 message RespondApprovalResponse {

@@ -21,9 +21,8 @@ enum RpcMethod {
   RPC_METHOD_CREATE_TASK = 9;
   RPC_METHOD_GET_TASK = 10;
   RPC_METHOD_CANCEL_TASK = 11;
-  RPC_METHOD_LIST_PENDING_APPROVALS = 12;
-  RPC_METHOD_GET_APPROVAL = 13;
-  RPC_METHOD_RESPOND_APPROVAL = 14;
+  RPC_METHOD_GET_APPROVAL = 12;
+  RPC_METHOD_RESPOND_APPROVAL = 13;
 }
 
 message RpcRequest {
@@ -83,7 +82,6 @@ service AgentFortService {
   rpc CreateTask(CreateTaskRequest) returns (CreateTaskResponse);
   rpc GetTask(GetTaskRequest) returns (GetTaskResponse);
   rpc CancelTask(CancelTaskRequest) returns (CancelTaskResponse);
-  rpc ListPendingApprovals(ListPendingApprovalsRequest) returns (ListPendingApprovalsResponse);
   rpc GetApproval(GetApprovalRequest) returns (GetApprovalResponse);
   rpc RespondApproval(RespondApprovalRequest) returns (RespondApprovalResponse);
 }

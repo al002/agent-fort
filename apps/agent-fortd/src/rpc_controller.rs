@@ -2,15 +2,19 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use af_core::{
-    CancelTaskInput, CreateSessionInput, CreateTaskInput, SessionAppError, SessionAppService,
-    SessionConfig, TaskAppError, TaskAppService,
+    ApprovalAppError, ApprovalAppService, CancelTaskInput, CreateSessionInput, CreateTaskInput,
+    GetApprovalInput, RespondApprovalInput, SessionAppError, SessionAppService, SessionConfig,
+    TaskAppError, TaskAppService,
 };
 use af_rpc_proto::codec::{decode_message, encode_message};
 use af_rpc_proto::{
-    CancelTaskRequest, CancelTaskResponse, CreateSessionRequest, CreateSessionResponse,
-    CreateTaskRequest, CreateTaskResponse, DaemonInfo, GetDaemonInfoRequest, GetDaemonInfoResponse,
-    GetTaskRequest, GetTaskResponse, PingRequest, PingResponse, RpcError, RpcErrorCode, RpcMethod,
-    RpcRequest, RpcResponse, Session, SessionLease, SessionStatus, Task, TaskCreatedBy, TaskStatus,
+    Approval as RpcApproval, ApprovalDecision as RpcApprovalDecision,
+    ApprovalItem as RpcApprovalItem, ApprovalStatus as RpcApprovalStatus, CancelTaskRequest,
+    CancelTaskResponse, CreateSessionRequest, CreateSessionResponse, CreateTaskRequest,
+    CreateTaskResponse, DaemonInfo, GetApprovalRequest, GetApprovalResponse, GetDaemonInfoRequest,
+    GetDaemonInfoResponse, GetTaskRequest, GetTaskResponse, PingRequest, PingResponse,
+    RespondApprovalRequest, RespondApprovalResponse, RpcError, RpcErrorCode, RpcMethod, RpcRequest,
+    RpcResponse, Session, SessionLease, SessionStatus, Task, TaskCreatedBy, TaskStatus,
     rpc_response,
 };
 use af_rpc_transport::RpcConnection;
@@ -30,18 +34,21 @@ struct ControllerState {
     store: Arc<Store>,
     session_service: SessionAppService,
     task_service: TaskAppService,
+    approval_service: ApprovalAppService,
 }
 
 impl RpcController {
     pub fn new(daemon_instance_id: String, store: Arc<Store>) -> Self {
         let session_service = SessionAppService::new(store.clone(), SessionConfig::default());
         let task_service = TaskAppService::new(store.clone());
+        let approval_service = ApprovalAppService::new(store.clone());
         Self {
             state: Arc::new(ControllerState {
                 daemon_instance_id,
                 store,
                 session_service,
                 task_service,
+                approval_service,
             }),
         }
     }
@@ -58,6 +65,8 @@ impl RpcController {
                     "CreateTask".to_string(),
                     "GetTask".to_string(),
                     "CancelTask".to_string(),
+                    "GetApproval".to_string(),
+                    "RespondApproval".to_string(),
                 ],
             }),
         }
@@ -94,6 +103,8 @@ impl RpcController {
             RpcMethod::CreateTask => self.handle_create_task(request.payload),
             RpcMethod::GetTask => self.handle_get_task(request.payload),
             RpcMethod::CancelTask => self.handle_cancel_task(request.payload),
+            RpcMethod::GetApproval => self.handle_get_approval(request.payload),
+            RpcMethod::RespondApproval => self.handle_respond_approval(request.payload),
             _ => err(
                 RpcErrorCode::MethodNotSupported,
                 format!("method not supported: {:?}", method),
@@ -247,6 +258,95 @@ impl RpcController {
         }
     }
 
+    fn handle_get_approval(&self, payload: Vec<u8>) -> RpcResponse {
+        let request = match decode_message::<GetApprovalRequest>(&payload) {
+            Ok(request) => request,
+            Err(error) => {
+                return err(
+                    RpcErrorCode::BadRequest,
+                    format!("decode GetApprovalRequest failed: {error}"),
+                );
+            }
+        };
+
+        if let Some(response) = self.ensure_session_access(
+            &request.session_id,
+            &request.client_instance_id,
+            &request.rebind_token,
+        ) {
+            return response;
+        }
+
+        match self.state.approval_service.get_approval(GetApprovalInput {
+            session_id: request.session_id,
+            approval_id: request.approval_id,
+        }) {
+            Ok(approval) => ok(encode_message(&GetApprovalResponse {
+                approval: Some(to_proto_approval(approval)),
+            })),
+            Err(error) => map_approval_error(error),
+        }
+    }
+
+    fn handle_respond_approval(&self, payload: Vec<u8>) -> RpcResponse {
+        let request = match decode_message::<RespondApprovalRequest>(&payload) {
+            Ok(request) => request,
+            Err(error) => {
+                return err(
+                    RpcErrorCode::BadRequest,
+                    format!("decode RespondApprovalRequest failed: {error}"),
+                );
+            }
+        };
+
+        if let Some(response) = self.ensure_session_access(
+            &request.session_id,
+            &request.client_instance_id,
+            &request.rebind_token,
+        ) {
+            return response;
+        }
+
+        let decision = match rpc_approval_decision_to_domain(request.decision) {
+            Ok(decision) => decision,
+            Err(response) => return response,
+        };
+
+        let responded = match self
+            .state
+            .approval_service
+            .respond_approval(RespondApprovalInput {
+                session_id: request.session_id.clone(),
+                approval_id: request.approval_id.clone(),
+                decision,
+                idempotency_key: request.idempotency_key,
+                reason: request.reason,
+                responded_at_ms: now_ms(),
+            }) {
+            Ok(result) => result,
+            Err(error) => return map_approval_error(error),
+        };
+
+        let task = if responded.transition_applied {
+            responded.task
+        } else {
+            match self
+                .state
+                .task_service
+                .get_task(&request.session_id, &responded.task.task_id)
+            {
+                Ok(task) => task,
+                Err(error) => return map_task_error(error),
+            }
+        };
+
+        ok(encode_message(&RespondApprovalResponse {
+            approval: Some(to_proto_approval(responded.approval)),
+            task: Some(to_proto_task(task)),
+            invoke_result: None,
+        }))
+    }
+
     fn ensure_session_access(
         &self,
         session_id: &str,
@@ -334,6 +434,83 @@ fn map_task_error(error: TaskAppError) -> RpcResponse {
     }
 }
 
+fn map_approval_error(error: ApprovalAppError) -> RpcResponse {
+    match error {
+        ApprovalAppError::Validation { message } => err(RpcErrorCode::BadRequest, message),
+        ApprovalAppError::NotFound { .. } => {
+            err(RpcErrorCode::ApprovalNotFound, "approval not found")
+        }
+        ApprovalAppError::Expired { .. } => err(RpcErrorCode::ApprovalExpired, "approval expired"),
+        ApprovalAppError::IdempotencyConflict { .. } => err(
+            RpcErrorCode::ApprovalIdempotencyConflict,
+            "approval idempotency conflict",
+        ),
+        ApprovalAppError::InvalidState { message } => {
+            err(RpcErrorCode::ApprovalInvalidState, message)
+        }
+        ApprovalAppError::Store { message } => err(RpcErrorCode::StoreError, message),
+        ApprovalAppError::Audit { message } => err(RpcErrorCode::AuditWriteFailed, message),
+        ApprovalAppError::Internal { message } => err(RpcErrorCode::InternalError, message),
+    }
+}
+
+fn rpc_approval_decision_to_domain(
+    raw_decision: i32,
+) -> Result<af_approval::ApprovalDecision, RpcResponse> {
+    let decision = RpcApprovalDecision::try_from(raw_decision).map_err(|_| {
+        err(
+            RpcErrorCode::BadRequest,
+            format!("unknown ApprovalDecision value: {raw_decision}"),
+        )
+    })?;
+    match decision {
+        RpcApprovalDecision::Unspecified => Err(err(
+            RpcErrorCode::BadRequest,
+            "approval decision must not be unspecified",
+        )),
+        RpcApprovalDecision::Approve => Ok(af_approval::ApprovalDecision::Approve),
+        RpcApprovalDecision::Deny => Ok(af_approval::ApprovalDecision::Deny),
+    }
+}
+
+fn to_proto_approval(approval: af_approval::Approval) -> RpcApproval {
+    let items = approval
+        .items
+        .into_iter()
+        .map(|item| RpcApprovalItem {
+            kind: item.kind,
+            target: item.target.unwrap_or_default(),
+            summary: item.summary,
+        })
+        .collect();
+
+    RpcApproval {
+        approval_id: approval.approval_id,
+        session_id: approval.session_id,
+        task_id: approval.task_id,
+        trace_id: approval.trace_id,
+        status: to_proto_approval_status(approval.status) as i32,
+        summary: approval.summary,
+        items,
+        details: approval.details,
+        created_at_ms: approval.created_at_ms,
+        expires_at_ms: approval.expires_at_ms,
+        responded_at_ms: approval.responded_at_ms,
+        response_reason: approval.response_reason,
+        response_idempotency_key: approval.response_idempotency_key,
+    }
+}
+
+fn to_proto_approval_status(status: af_approval::ApprovalStatus) -> RpcApprovalStatus {
+    match status {
+        af_approval::ApprovalStatus::Pending => RpcApprovalStatus::Pending,
+        af_approval::ApprovalStatus::Approved => RpcApprovalStatus::Approved,
+        af_approval::ApprovalStatus::Denied => RpcApprovalStatus::Denied,
+        af_approval::ApprovalStatus::Expired => RpcApprovalStatus::Expired,
+        af_approval::ApprovalStatus::Cancelled => RpcApprovalStatus::Cancelled,
+    }
+}
+
 fn to_proto_session(session: af_session::Session) -> Session {
     Session {
         session_id: session.session_id,
@@ -395,10 +572,11 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use af_approval::{ApprovalItem, ApprovalRepository, ApprovalStatus, NewApproval};
     use af_audit::{AuditCursor, AuditEventType, AuditRepository};
     use af_session::{NewSession, SessionLease, SessionRepository};
     use af_store::StoreOptions;
-    use af_task::TaskRepository;
+    use af_task::{NewTask, TaskCreatedBy, TaskRepository, TaskStatus as DomainTaskStatus};
 
     #[test]
     fn create_session_dispatch_returns_session_and_audit() {
@@ -605,6 +783,143 @@ mod tests {
         };
         assert_eq!(error.code, RpcErrorCode::InvalidSessionState as i32);
         assert!(error.message.contains("expired"));
+    }
+
+    #[test]
+    fn approval_routes_round_trip_and_resume_blocked_task() {
+        let store = Arc::new(Store::open(StoreOptions::in_memory()).expect("open store"));
+        let controller = RpcController::new("daemon-1".to_string(), store.clone());
+
+        let session_response = controller.dispatch(RpcRequest {
+            method: RpcMethod::CreateSession as i32,
+            payload: encode_message(&CreateSessionRequest {
+                agent_name: "agent-1".to_string(),
+                client_instance_id: "client-1".to_string(),
+                lease_ttl_secs: Some(30),
+            }),
+        });
+        let session_payload = match session_response.outcome {
+            Some(rpc_response::Outcome::Payload(payload)) => payload,
+            other => panic!("expected payload response, got {other:?}"),
+        };
+        let created_session = decode_message::<CreateSessionResponse>(&session_payload)
+            .expect("decode create session response")
+            .session
+            .expect("session must exist");
+        let lease = created_session.lease.clone().expect("lease must exist");
+
+        store
+            .create_task(NewTask {
+                task_id: "task-approval-1".to_string(),
+                session_id: created_session.session_id.clone(),
+                status: DomainTaskStatus::Blocked,
+                goal: Some("wait approval".to_string()),
+                created_by: TaskCreatedBy::Invoke,
+                trace_id: "trace-approval-1".to_string(),
+                limits_json: None,
+                current_step: 0,
+                created_at_ms: 1_000,
+                updated_at_ms: 1_000,
+            })
+            .expect("create blocked task");
+        store
+            .create_approval(NewApproval {
+                approval_id: "approval-1".to_string(),
+                session_id: created_session.session_id.clone(),
+                task_id: "task-approval-1".to_string(),
+                trace_id: "trace-approval-1".to_string(),
+                status: ApprovalStatus::Pending,
+                summary: "network access requires approval".to_string(),
+                details: Some("outbound request to example.com".to_string()),
+                items: vec![ApprovalItem {
+                    kind: "network".to_string(),
+                    target: Some("example.com".to_string()),
+                    summary: "outbound network".to_string(),
+                }],
+                policy_reason: "needs manual approval".to_string(),
+                policy_revision: 1,
+                execution_contract_json: "{\"decision\":\"ask\"}".to_string(),
+                created_at_ms: 1_000,
+                expires_at_ms: now_ms() + 60_000,
+            })
+            .expect("create approval");
+
+        let get_response = controller.dispatch(RpcRequest {
+            method: RpcMethod::GetApproval as i32,
+            payload: encode_message(&GetApprovalRequest {
+                session_id: created_session.session_id.clone(),
+                approval_id: "approval-1".to_string(),
+                client_instance_id: lease.client_instance_id.clone(),
+                rebind_token: lease.rebind_token.clone(),
+            }),
+        });
+        let get_payload = match get_response.outcome {
+            Some(rpc_response::Outcome::Payload(payload)) => payload,
+            other => panic!("expected payload response, got {other:?}"),
+        };
+        let fetched = decode_message::<GetApprovalResponse>(&get_payload)
+            .expect("decode get approval response")
+            .approval
+            .expect("approval must exist");
+        assert_eq!(fetched.status, RpcApprovalStatus::Pending as i32);
+        assert_eq!(fetched.summary, "network access requires approval");
+        assert!(!fetched.items.is_empty());
+
+        let respond_response = controller.dispatch(RpcRequest {
+            method: RpcMethod::RespondApproval as i32,
+            payload: encode_message(&RespondApprovalRequest {
+                session_id: created_session.session_id.clone(),
+                approval_id: "approval-1".to_string(),
+                decision: RpcApprovalDecision::Approve as i32,
+                idempotency_key: "idem-approval-1".to_string(),
+                reason: Some("approved".to_string()),
+                client_instance_id: lease.client_instance_id,
+                rebind_token: lease.rebind_token,
+            }),
+        });
+        let respond_payload = match respond_response.outcome {
+            Some(rpc_response::Outcome::Payload(payload)) => payload,
+            other => panic!("expected payload response, got {other:?}"),
+        };
+        let responded = decode_message::<RespondApprovalResponse>(&respond_payload)
+            .expect("decode respond approval response");
+        assert_eq!(
+            responded
+                .approval
+                .as_ref()
+                .expect("approval must exist")
+                .status,
+            RpcApprovalStatus::Approved as i32
+        );
+        assert_eq!(
+            responded.task.as_ref().expect("task must exist").status,
+            TaskStatus::Pending as i32
+        );
+
+        let task = store
+            .get_task(&created_session.session_id, "task-approval-1")
+            .expect("task should exist");
+        assert_eq!(task.status, DomainTaskStatus::Pending);
+
+        let events = store
+            .list_by_task(
+                "task-approval-1",
+                AuditCursor {
+                    after_seq: None,
+                    limit: 20,
+                },
+            )
+            .expect("list task audit");
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_type == AuditEventType::ApprovalApproved)
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_type == AuditEventType::InvocationResumedAfterApproval)
+        );
     }
 
     #[test]

@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use af_approval::{
-    ApprovalDecision, ApprovalRepository, ApprovalRepositoryError, ApprovalStatus,
-    ListPendingApprovalsQuery, NewApproval, RespondApprovalCommand,
+    ApprovalDecision, ApprovalItem, ApprovalRepository, ApprovalRepositoryError, ApprovalStatus,
+    NewApproval, RespondApprovalCommand,
 };
 use af_audit::{AuditCursor, AuditEventType, AuditRepository, NewAuditEvent};
 use af_core::{
-    CancelTaskInput, CreateSessionInput, CreateTaskInput, SessionAppService, SessionConfig,
-    TaskAppService,
+    ApprovalPort, CancelTaskInput, CreateSessionInput, CreateTaskInput, SessionAppService,
+    SessionConfig, TaskAppService,
 };
 use af_session::{
     NewSession, RenewLeaseCommand, SessionLease, SessionRepository, SessionStatus,
@@ -134,31 +134,22 @@ fn approval_repository_idempotency_and_expire_flow() {
             session_id: "session-1".to_string(),
             task_id: "task-1".to_string(),
             trace_id: "trace-1".to_string(),
-            capability: "shell.exec".to_string(),
-            operation: "run".to_string(),
             status: ApprovalStatus::Pending,
+            summary: "network access requires approval".to_string(),
+            details: Some("outbound request to example.com".to_string()),
+            items: vec![ApprovalItem {
+                kind: "network".to_string(),
+                target: Some("example.com".to_string()),
+                summary: "outbound network".to_string(),
+            }],
             policy_reason: "needs approval".to_string(),
-            risk_class: "high".to_string(),
-            command_class: "shell".to_string(),
-            input_brief_json: "{\"cmd\":\"rm -rf\"}".to_string(),
-            requested_runtime_backend: "sandbox".to_string(),
-            resolved_runtime_backend: "sandbox".to_string(),
-            requires_network: false,
-            requires_pty: false,
+            policy_revision: 1,
+            execution_contract_json: "{\"decision\":\"ask\"}".to_string(),
             created_at_ms: 1_000,
             expires_at_ms: 5_000,
         })
         .expect("create approval");
     assert_eq!(created.status, ApprovalStatus::Pending);
-
-    let pending = store
-        .list_pending_approvals(ListPendingApprovalsQuery {
-            session_id: "session-1".to_string(),
-            limit: 10,
-            after_approval_id: None,
-        })
-        .expect("list pending approvals");
-    assert_eq!(pending.len(), 1);
 
     let approved = store
         .respond_approval(RespondApprovalCommand {
@@ -205,17 +196,17 @@ fn approval_repository_idempotency_and_expire_flow() {
             session_id: "session-1".to_string(),
             task_id: "task-1".to_string(),
             trace_id: "trace-1".to_string(),
-            capability: "shell.exec".to_string(),
-            operation: "run".to_string(),
             status: ApprovalStatus::Pending,
+            summary: "network access requires approval".to_string(),
+            details: None,
+            items: vec![ApprovalItem {
+                kind: "network".to_string(),
+                target: Some("example.com".to_string()),
+                summary: "outbound network".to_string(),
+            }],
             policy_reason: "will expire".to_string(),
-            risk_class: "high".to_string(),
-            command_class: "shell".to_string(),
-            input_brief_json: "{\"cmd\":\"ls\"}".to_string(),
-            requested_runtime_backend: "sandbox".to_string(),
-            resolved_runtime_backend: "sandbox".to_string(),
-            requires_network: false,
-            requires_pty: false,
+            policy_revision: 1,
+            execution_contract_json: "{\"decision\":\"ask\"}".to_string(),
             created_at_ms: 1_000,
             expires_at_ms: 1_200,
         })
@@ -389,6 +380,75 @@ fn task_service_writes_task_and_audit_atomically() {
         .expect("list task audit after cancel");
     assert_eq!(after_cancel.len(), 2);
     assert_eq!(after_cancel[1].event_type, AuditEventType::TaskCancelled);
+}
+
+#[test]
+fn respond_approval_skips_invocation_audit_when_task_status_does_not_change() {
+    let store = Store::open(StoreOptions::in_memory()).expect("open in-memory store");
+    create_base_session(&store, "session-1");
+    create_base_task(&store, "session-1", "task-1", "trace-1");
+
+    store
+        .update_task_status(UpdateTaskStatusCommand {
+            session_id: "session-1".to_string(),
+            task_id: "task-1".to_string(),
+            expected_status: Some(TaskStatus::Pending),
+            new_status: TaskStatus::Cancelled,
+            updated_at_ms: 1_100,
+            ended_at_ms: Some(1_100),
+            error_code: Some("CANCELLED".to_string()),
+            error_message: Some("cancelled before approval response".to_string()),
+        })
+        .expect("cancel task before approval response");
+
+    store
+        .create_approval(NewApproval {
+            approval_id: "approval-1".to_string(),
+            session_id: "session-1".to_string(),
+            task_id: "task-1".to_string(),
+            trace_id: "trace-1".to_string(),
+            status: ApprovalStatus::Pending,
+            summary: "network access requires approval".to_string(),
+            details: None,
+            items: vec![ApprovalItem {
+                kind: "network".to_string(),
+                target: Some("example.com".to_string()),
+                summary: "outbound network".to_string(),
+            }],
+            policy_reason: "needs approval".to_string(),
+            policy_revision: 1,
+            execution_contract_json: "{\"decision\":\"ask\"}".to_string(),
+            created_at_ms: 1_000,
+            expires_at_ms: 5_000,
+        })
+        .expect("create approval");
+
+    let result = <Store as ApprovalPort>::respond_approval_with_effect(
+        &store,
+        RespondApprovalCommand {
+            session_id: "session-1".to_string(),
+            approval_id: "approval-1".to_string(),
+            decision: ApprovalDecision::Approve,
+            idempotency_key: "idem-1".to_string(),
+            reason: Some("approve anyway".to_string()),
+            responded_at_ms: 1_500,
+        },
+    )
+    .expect("respond approval");
+    assert_eq!(result.approval.status, ApprovalStatus::Approved);
+    assert_eq!(result.task.status, TaskStatus::Cancelled);
+
+    let events = store
+        .list_by_task(
+            "task-1",
+            AuditCursor {
+                after_seq: None,
+                limit: 10,
+            },
+        )
+        .expect("list audit by task");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event_type, AuditEventType::ApprovalApproved);
 }
 
 fn create_base_session(store: &Store, session_id: &str) {

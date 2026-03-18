@@ -13,6 +13,29 @@ pub enum SessionAppError {
 }
 
 #[derive(Debug, Error)]
+pub enum ApprovalAppError {
+    #[error("approval validation failed: {message}")]
+    Validation { message: String },
+    #[error("approval not found: session_id={session_id}, approval_id={approval_id}")]
+    NotFound {
+        session_id: String,
+        approval_id: String,
+    },
+    #[error("approval expired: approval_id={approval_id}")]
+    Expired { approval_id: String },
+    #[error("approval idempotency conflict: approval_id={approval_id}")]
+    IdempotencyConflict { approval_id: String },
+    #[error("approval invalid state: {message}")]
+    InvalidState { message: String },
+    #[error("approval storage failed: {message}")]
+    Store { message: String },
+    #[error("approval audit write failed: {message}")]
+    Audit { message: String },
+    #[error("approval internal error: {message}")]
+    Internal { message: String },
+}
+
+#[derive(Debug, Error)]
 pub enum TaskAppError {
     #[error("task validation failed: {message}")]
     Validation { message: String },

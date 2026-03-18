@@ -1,7 +1,8 @@
 use af_rpc_proto::codec::{decode_message, encode_message};
 use af_rpc_proto::{
-    CreateSessionRequest, CreateSessionResponse, PingRequest, PingResponse, RpcErrorCode,
-    RpcMethod, RpcRequest, RpcResponse, rpc_response,
+    ApprovalDecision, CreateSessionRequest, CreateSessionResponse, GetApprovalRequest,
+    GetApprovalResponse, PingRequest, PingResponse, RespondApprovalRequest,
+    RespondApprovalResponse, RpcErrorCode, RpcMethod, RpcRequest, RpcResponse, rpc_response,
 };
 use af_rpc_transport::{Endpoint, RpcClient};
 use uuid::Uuid;
@@ -59,6 +60,10 @@ impl RuntimeClient {
         &self.endpoint
     }
 
+    pub fn client_instance_id(&self) -> &str {
+        &self.client_instance_id
+    }
+
     pub async fn ping(&mut self) -> Result<PingResponse> {
         let payload = self
             .call_rpc(RpcMethod::Ping, encode_message(&PingRequest {}))
@@ -83,6 +88,52 @@ impl RuntimeClient {
             .await?;
         decode_message::<CreateSessionResponse>(&payload).map_err(|error| {
             SdkError::Protocol(format!("decode CreateSessionResponse failed: {error}"))
+        })
+    }
+
+    pub async fn get_approval(
+        &mut self,
+        session_id: String,
+        approval_id: String,
+        rebind_token: String,
+    ) -> Result<GetApprovalResponse> {
+        let request = GetApprovalRequest {
+            session_id,
+            approval_id,
+            client_instance_id: self.client_instance_id.clone(),
+            rebind_token,
+        };
+        let payload = self
+            .call_rpc(RpcMethod::GetApproval, encode_message(&request))
+            .await?;
+        decode_message::<GetApprovalResponse>(&payload).map_err(|error| {
+            SdkError::Protocol(format!("decode GetApprovalResponse failed: {error}"))
+        })
+    }
+
+    pub async fn respond_approval(
+        &mut self,
+        session_id: String,
+        approval_id: String,
+        decision: ApprovalDecision,
+        idempotency_key: String,
+        reason: Option<String>,
+        rebind_token: String,
+    ) -> Result<RespondApprovalResponse> {
+        let request = RespondApprovalRequest {
+            session_id,
+            approval_id,
+            decision: decision as i32,
+            idempotency_key,
+            reason,
+            client_instance_id: self.client_instance_id.clone(),
+            rebind_token,
+        };
+        let payload = self
+            .call_rpc(RpcMethod::RespondApproval, encode_message(&request))
+            .await?;
+        decode_message::<RespondApprovalResponse>(&payload).map_err(|error| {
+            SdkError::Protocol(format!("decode RespondApprovalResponse failed: {error}"))
         })
     }
 

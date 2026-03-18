@@ -8,6 +8,7 @@ af-rpc-proto = { path = "../../protocol/rpc-proto" }
 af-rpc-transport = { path = "../../protocol/rpc-transport" }
 af-core = { path = "../../core" }
 af-audit = { path = "../../domain/audit" }
+af-approval = { path = "../../domain/approval" }
 af-sandbox = { path = "../../infra/sandbox" }
 af-policy-infra = { path = "../../infra/policy" }
 af-session = { path = "../../domain/session" }

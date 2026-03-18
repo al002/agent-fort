@@ -1,14 +1,14 @@
 use af_approval::{
-    Approval, ApprovalDecision, ApprovalRepository, ApprovalRepositoryError, ApprovalStatus,
-    ApprovalSummary, ListPendingApprovalsQuery, NewApproval, RespondApprovalCommand,
+    Approval, ApprovalDecision, ApprovalItem, ApprovalRepository, ApprovalRepositoryError,
+    ApprovalStatus, NewApproval, RespondApprovalCommand,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::{Store, StoreError, StoreResult, is_dup_key, sql_err, storage_msg, to_i64, to_u64};
 
-const RULE_APPROVAL_EXPIRED: &str = "approval_expired";
-const RULE_APPROVAL_IDEMPOTENCY_CONFLICT: &str = "approval_idempotency_conflict";
-const RULE_APPROVAL_INVALID_STATE: &str = "approval_invalid_state";
+pub(crate) const RULE_APPROVAL_EXPIRED: &str = "approval_expired";
+pub(crate) const RULE_APPROVAL_IDEMPOTENCY_CONFLICT: &str = "approval_idempotency_conflict";
+pub(crate) const RULE_APPROVAL_INVALID_STATE: &str = "approval_invalid_state";
 
 impl ApprovalRepository for Store {
     fn create_approval(&self, command: NewApproval) -> Result<Approval, ApprovalRepositoryError> {
@@ -36,17 +36,6 @@ impl ApprovalRepository for Store {
         .map_err(|error| on_lookup_err(error, &session_id, &approval_id))
     }
 
-    fn list_pending_approvals(
-        &self,
-        query: ListPendingApprovalsQuery,
-    ) -> Result<Vec<ApprovalSummary>, ApprovalRepositoryError> {
-        if query.limit == 0 {
-            return Ok(Vec::new());
-        }
-        self.execute(move |connection| list_pending_approvals(connection, query))
-            .map_err(on_store_err)
-    }
-
     fn respond_approval(
         &self,
         command: RespondApprovalCommand,
@@ -71,32 +60,30 @@ impl ApprovalRepository for Store {
 }
 
 fn create_approval(connection: &mut Connection, command: NewApproval) -> StoreResult<Approval> {
+    let items_json = serde_json::to_string(&command.items).map_err(|error| {
+        StoreError::Internal(format!("serialize approval items failed: {error}"))
+    })?;
     connection
         .execute(
             "INSERT INTO approvals (
-               approval_id, session_id, task_id, trace_id, capability, operation, status, policy_reason,
-               risk_class, command_class, input_brief_json, requested_runtime_backend, resolved_runtime_backend,
-               requires_network, requires_pty, created_at_ms, expires_at_ms, responded_at_ms,
-               response_reason, response_idempotency_key
+               approval_id, session_id, task_id, trace_id, status, summary, details, items_json,
+               policy_reason, policy_revision, execution_contract_json, created_at_ms, expires_at_ms,
+               responded_at_ms, response_reason, response_idempotency_key
              ) VALUES (
-               ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, NULL, NULL, NULL
+               ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, NULL, NULL, NULL
              )",
             params![
                 command.approval_id,
                 command.session_id,
                 command.task_id,
                 command.trace_id,
-                command.capability,
-                command.operation,
                 approval_status_to_db(command.status),
+                command.summary,
+                command.details,
+                items_json,
                 command.policy_reason,
-                command.risk_class,
-                command.command_class,
-                command.input_brief_json,
-                command.requested_runtime_backend,
-                command.resolved_runtime_backend,
-                bool_to_i64(command.requires_network),
-                bool_to_i64(command.requires_pty),
+                to_i64(command.policy_revision, "policy_revision")?,
+                command.execution_contract_json,
                 to_i64(command.created_at_ms, "created_at_ms")?,
                 to_i64(command.expires_at_ms, "expires_at_ms")?,
             ],
@@ -105,81 +92,6 @@ fn create_approval(connection: &mut Connection, command: NewApproval) -> StoreRe
 
     fetch_approval(connection, &command.session_id, &command.approval_id)?
         .ok_or_else(|| StoreError::Internal("inserted approval missing after insert".to_string()))
-}
-
-fn list_pending_approvals(
-    connection: &mut Connection,
-    query: ListPendingApprovalsQuery,
-) -> StoreResult<Vec<ApprovalSummary>> {
-    let (sql, values): (&str, Vec<rusqlite::types::Value>) = match query.after_approval_id {
-        Some(after_approval_id) => (
-            "SELECT approval_id, status, expires_at_ms, task_id, capability, operation, policy_reason
-             FROM approvals
-             WHERE session_id = ?1
-               AND status = ?2
-               AND approval_id > ?3
-             ORDER BY approval_id ASC
-             LIMIT ?4",
-            vec![
-                query.session_id.into(),
-                approval_status_to_db(ApprovalStatus::Pending)
-                    .to_string()
-                    .into(),
-                after_approval_id.into(),
-                i64::from(query.limit).into(),
-            ],
-        ),
-        None => (
-            "SELECT approval_id, status, expires_at_ms, task_id, capability, operation, policy_reason
-             FROM approvals
-             WHERE session_id = ?1
-               AND status = ?2
-             ORDER BY approval_id ASC
-             LIMIT ?3",
-            vec![
-                query.session_id.into(),
-                approval_status_to_db(ApprovalStatus::Pending)
-                    .to_string()
-                    .into(),
-                i64::from(query.limit).into(),
-            ],
-        ),
-    };
-
-    let mut statement = connection
-        .prepare(sql)
-        .map_err(|error| sql_err("prepare list pending approvals", error))?;
-    let rows = statement
-        .query_map(rusqlite::params_from_iter(values), |row| {
-            let status: String = row.get(1)?;
-            let expires_at_ms: i64 = row.get(2)?;
-            Ok((
-                row.get(0)?,
-                status,
-                expires_at_ms,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-                row.get(6)?,
-            ))
-        })
-        .map_err(|error| sql_err("query list pending approvals", error))?;
-
-    let mut list = Vec::new();
-    for row in rows {
-        let (approval_id, status, expires_at_ms, task_id, capability, operation, policy_reason) =
-            row.map_err(|error| sql_err("read list pending approvals row", error))?;
-        list.push(ApprovalSummary {
-            approval_id,
-            status: approval_status_from_db(&status)?,
-            expires_at_ms: to_u64(expires_at_ms, "expires_at_ms")?,
-            task_id,
-            capability,
-            operation,
-            policy_reason,
-        });
-    }
-    Ok(list)
 }
 
 fn respond_approval(
@@ -325,7 +237,7 @@ fn expire_pending_approvals(
     Ok(approvals)
 }
 
-fn fetch_approval(
+pub(crate) fn fetch_approval(
     connection: &Connection,
     session_id: &str,
     approval_id: &str,
@@ -335,7 +247,7 @@ fn fetch_approval(
         .transpose()
 }
 
-fn fetch_approval_raw(
+pub(crate) fn fetch_approval_raw(
     connection: &Connection,
     session_id: &str,
     approval_id: &str,
@@ -343,9 +255,8 @@ fn fetch_approval_raw(
     connection
         .query_row(
             "SELECT
-               approval_id, session_id, task_id, trace_id, capability, operation, status,
-               policy_reason, risk_class, command_class, input_brief_json, requested_runtime_backend,
-               resolved_runtime_backend, requires_network, requires_pty, created_at_ms, expires_at_ms,
+               approval_id, session_id, task_id, trace_id, status, summary, details, items_json,
+               policy_reason, policy_revision, execution_contract_json, created_at_ms, expires_at_ms,
                responded_at_ms, response_reason, response_idempotency_key
              FROM approvals
              WHERE session_id = ?1 AND approval_id = ?2",
@@ -357,47 +268,46 @@ fn fetch_approval_raw(
 }
 
 #[derive(Debug)]
-struct RawApproval {
-    approval_id: String,
-    session_id: String,
-    task_id: String,
-    trace_id: String,
-    capability: String,
-    operation: String,
-    status: String,
-    policy_reason: String,
-    risk_class: String,
-    command_class: String,
-    input_brief_json: String,
-    requested_runtime_backend: String,
-    resolved_runtime_backend: String,
-    requires_network: i64,
-    requires_pty: i64,
-    created_at_ms: i64,
-    expires_at_ms: i64,
-    responded_at_ms: Option<i64>,
-    response_reason: Option<String>,
-    response_idempotency_key: Option<String>,
+pub(crate) struct RawApproval {
+    pub(crate) approval_id: String,
+    pub(crate) session_id: String,
+    pub(crate) task_id: String,
+    pub(crate) trace_id: String,
+    pub(crate) status: String,
+    pub(crate) summary: String,
+    pub(crate) details: Option<String>,
+    pub(crate) items_json: String,
+    pub(crate) policy_reason: String,
+    pub(crate) policy_revision: i64,
+    pub(crate) execution_contract_json: String,
+    pub(crate) created_at_ms: i64,
+    pub(crate) expires_at_ms: i64,
+    pub(crate) responded_at_ms: Option<i64>,
+    pub(crate) response_reason: Option<String>,
+    pub(crate) response_idempotency_key: Option<String>,
 }
 
 impl RawApproval {
-    fn into_domain(self) -> StoreResult<Approval> {
+    pub(crate) fn into_domain(self) -> StoreResult<Approval> {
+        let items =
+            serde_json::from_str::<Vec<ApprovalItem>>(&self.items_json).map_err(|error| {
+                StoreError::Internal(format!(
+                    "decode approval items failed: approval_id={}, error={error}",
+                    self.approval_id
+                ))
+            })?;
         Ok(Approval {
             approval_id: self.approval_id,
             session_id: self.session_id,
             task_id: self.task_id,
             trace_id: self.trace_id,
-            capability: self.capability,
-            operation: self.operation,
             status: approval_status_from_db(&self.status)?,
+            summary: self.summary,
+            details: self.details,
+            items,
             policy_reason: self.policy_reason,
-            risk_class: self.risk_class,
-            command_class: self.command_class,
-            input_brief_json: self.input_brief_json,
-            requested_runtime_backend: self.requested_runtime_backend,
-            resolved_runtime_backend: self.resolved_runtime_backend,
-            requires_network: self.requires_network != 0,
-            requires_pty: self.requires_pty != 0,
+            policy_revision: to_u64(self.policy_revision, "policy_revision")?,
+            execution_contract_json: self.execution_contract_json,
             created_at_ms: to_u64(self.created_at_ms, "created_at_ms")?,
             expires_at_ms: to_u64(self.expires_at_ms, "expires_at_ms")?,
             responded_at_ms: self
@@ -416,33 +326,29 @@ fn row_to_raw_approval(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawApproval>
         session_id: row.get(1)?,
         task_id: row.get(2)?,
         trace_id: row.get(3)?,
-        capability: row.get(4)?,
-        operation: row.get(5)?,
-        status: row.get(6)?,
-        policy_reason: row.get(7)?,
-        risk_class: row.get(8)?,
-        command_class: row.get(9)?,
-        input_brief_json: row.get(10)?,
-        requested_runtime_backend: row.get(11)?,
-        resolved_runtime_backend: row.get(12)?,
-        requires_network: row.get(13)?,
-        requires_pty: row.get(14)?,
-        created_at_ms: row.get(15)?,
-        expires_at_ms: row.get(16)?,
-        responded_at_ms: row.get(17)?,
-        response_reason: row.get(18)?,
-        response_idempotency_key: row.get(19)?,
+        status: row.get(4)?,
+        summary: row.get(5)?,
+        details: row.get(6)?,
+        items_json: row.get(7)?,
+        policy_reason: row.get(8)?,
+        policy_revision: row.get(9)?,
+        execution_contract_json: row.get(10)?,
+        created_at_ms: row.get(11)?,
+        expires_at_ms: row.get(12)?,
+        responded_at_ms: row.get(13)?,
+        response_reason: row.get(14)?,
+        response_idempotency_key: row.get(15)?,
     })
 }
 
-fn decision_to_status(decision: ApprovalDecision) -> ApprovalStatus {
+pub(crate) fn decision_to_status(decision: ApprovalDecision) -> ApprovalStatus {
     match decision {
         ApprovalDecision::Approve => ApprovalStatus::Approved,
         ApprovalDecision::Deny => ApprovalStatus::Denied,
     }
 }
 
-fn approval_status_to_db(status: ApprovalStatus) -> &'static str {
+pub(crate) fn approval_status_to_db(status: ApprovalStatus) -> &'static str {
     match status {
         ApprovalStatus::Pending => "PENDING",
         ApprovalStatus::Approved => "APPROVED",
@@ -452,7 +358,7 @@ fn approval_status_to_db(status: ApprovalStatus) -> &'static str {
     }
 }
 
-fn approval_status_from_db(status: &str) -> StoreResult<ApprovalStatus> {
+pub(crate) fn approval_status_from_db(status: &str) -> StoreResult<ApprovalStatus> {
     match status {
         "PENDING" => Ok(ApprovalStatus::Pending),
         "APPROVED" => Ok(ApprovalStatus::Approved),
@@ -463,10 +369,6 @@ fn approval_status_from_db(status: &str) -> StoreResult<ApprovalStatus> {
             "invalid approval status in db: {status}"
         ))),
     }
-}
-
-fn bool_to_i64(value: bool) -> i64 {
-    if value { 1 } else { 0 }
 }
 
 fn on_create_err(error: StoreError, approval_id: &str) -> ApprovalRepositoryError {

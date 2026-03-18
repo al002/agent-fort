@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+af-approval = { path = "../domain/approval" }
 af-audit = { path = "../domain/audit" }
 af-policy = { path = "../domain/policy" }
 af-policy-infra = { path = "../infra/policy" }

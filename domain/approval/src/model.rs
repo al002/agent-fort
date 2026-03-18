@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalStatus {
     Pending,
@@ -13,23 +15,26 @@ pub enum ApprovalDecision {
     Deny,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalItem {
+    pub kind: String,
+    pub target: Option<String>,
+    pub summary: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Approval {
     pub approval_id: String,
     pub session_id: String,
     pub task_id: String,
     pub trace_id: String,
-    pub capability: String,
-    pub operation: String,
     pub status: ApprovalStatus,
+    pub summary: String,
+    pub details: Option<String>,
+    pub items: Vec<ApprovalItem>,
     pub policy_reason: String,
-    pub risk_class: String,
-    pub command_class: String,
-    pub input_brief_json: String,
-    pub requested_runtime_backend: String,
-    pub resolved_runtime_backend: String,
-    pub requires_network: bool,
-    pub requires_pty: bool,
+    pub policy_revision: u64,
+    pub execution_contract_json: String,
     pub created_at_ms: u64,
     pub expires_at_ms: u64,
     pub responded_at_ms: Option<u64>,
@@ -38,33 +43,18 @@ pub struct Approval {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ApprovalSummary {
-    pub approval_id: String,
-    pub status: ApprovalStatus,
-    pub expires_at_ms: u64,
-    pub task_id: String,
-    pub capability: String,
-    pub operation: String,
-    pub policy_reason: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewApproval {
     pub approval_id: String,
     pub session_id: String,
     pub task_id: String,
     pub trace_id: String,
-    pub capability: String,
-    pub operation: String,
     pub status: ApprovalStatus,
+    pub summary: String,
+    pub details: Option<String>,
+    pub items: Vec<ApprovalItem>,
     pub policy_reason: String,
-    pub risk_class: String,
-    pub command_class: String,
-    pub input_brief_json: String,
-    pub requested_runtime_backend: String,
-    pub resolved_runtime_backend: String,
-    pub requires_network: bool,
-    pub requires_pty: bool,
+    pub policy_revision: u64,
+    pub execution_contract_json: String,
     pub created_at_ms: u64,
     pub expires_at_ms: u64,
 }
@@ -77,11 +67,4 @@ pub struct RespondApprovalCommand {
     pub idempotency_key: String,
     pub reason: Option<String>,
     pub responded_at_ms: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ListPendingApprovalsQuery {
-    pub session_id: String,
-    pub limit: u32,
-    pub after_approval_id: Option<String>,
 }

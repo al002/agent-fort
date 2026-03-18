@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 rusqlite = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 af-session = { path = "../../domain/session" }
 af-task = { path = "../../domain/task" }

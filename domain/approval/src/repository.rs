@@ -1,7 +1,5 @@
 use crate::errors::ApprovalRepositoryError;
-use crate::model::{
-    Approval, ApprovalSummary, ListPendingApprovalsQuery, NewApproval, RespondApprovalCommand,
-};
+use crate::model::{Approval, NewApproval, RespondApprovalCommand};
 
 pub trait ApprovalRepository: Send + Sync {
     fn create_approval(&self, command: NewApproval) -> Result<Approval, ApprovalRepositoryError>;
@@ -11,11 +9,6 @@ pub trait ApprovalRepository: Send + Sync {
         session_id: &str,
         approval_id: &str,
     ) -> Result<Approval, ApprovalRepositoryError>;
-
-    fn list_pending_approvals(
-        &self,
-        query: ListPendingApprovalsQuery,
-    ) -> Result<Vec<ApprovalSummary>, ApprovalRepositoryError>;
 
     fn respond_approval(
         &self,

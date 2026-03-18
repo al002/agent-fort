@@ -5,6 +5,9 @@ edition = "2024"
 
 [dependencies]
 af-audit = { path = "../domain/audit" }
+af-policy = { path = "../domain/policy" }
+af-policy-infra = { path = "../infra/policy" }
 af-session = { path = "../domain/session" }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }

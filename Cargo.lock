@@ -46,7 +46,10 @@ name = "af-core"
 version = "0.1.0"
 dependencies = [
  "af-audit",
+ "af-policy",
+ "af-policy-infra",
  "af-session",
+ "serde_json",
  "thiserror 2.0.18",
  "uuid",
 ]

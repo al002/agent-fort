@@ -33,24 +33,6 @@ message Approval {
   optional string response_idempotency_key = 13;
 }
 
-message PendingApproval {
-  string approval_id = 1;
-  ApprovalStatus status = 2;
-  uint64 expires_at_ms = 3;
-  string task_id = 4;
-  string summary = 5;
-}
-
-message ExecutionResult {
-  string state = 1;
-  optional int32 exit_code = 2;
-  bool timed_out = 3;
-  string stdout = 4;
-  string stderr = 5;
-  bool stdout_truncated = 6;
-  bool stderr_truncated = 7;
-}
-
 message InvokeResult {
   Task task = 1;
   oneof outcome {

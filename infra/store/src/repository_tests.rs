@@ -474,7 +474,7 @@ fn create_base_task(store: &Store, session_id: &str, task_id: &str, trace_id: &s
             session_id: session_id.to_string(),
             status: TaskStatus::Pending,
             goal: None,
-            created_by: TaskCreatedBy::Invoke,
+            created_by: TaskCreatedBy::Explicit,
             trace_id: trace_id.to_string(),
             limits_json: None,
             current_step: 0,

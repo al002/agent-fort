@@ -204,6 +204,9 @@ impl RpcController {
                 );
             }
         };
+        if let Some(response) = validate_task_operation(request.operation.as_ref()) {
+            return response;
+        }
 
         if let Some(response) = self.ensure_session_access(
             &request.session_id,
@@ -222,6 +225,7 @@ impl RpcController {
         match created {
             Ok(task) => ok(encode_message(&CreateTaskResponse {
                 task: Some(to_proto_task(task)),
+                outcome: None,
             })),
             Err(error) => map_task_error(error),
         }
@@ -438,6 +442,25 @@ fn map_session_error(error: SessionAppError) -> RpcResponse {
     }
 }
 
+fn validate_task_operation(operation: Option<&af_rpc_proto::TaskOperation>) -> Option<RpcResponse> {
+    let operation = match operation {
+        Some(operation) => operation,
+        None => {
+            return Some(err(
+                RpcErrorCode::BadRequest,
+                "create_task operation is required",
+            ));
+        }
+    };
+    if operation.kind.trim().is_empty() {
+        return Some(err(
+            RpcErrorCode::BadRequest,
+            "create_task operation.kind must not be empty",
+        ));
+    }
+    None
+}
+
 fn map_session_lookup_error(error: SessionRepositoryError) -> RpcResponse {
     match error {
         SessionRepositoryError::NotFound { .. } => {
@@ -575,7 +598,6 @@ fn to_proto_task(task: af_task::Task) -> Task {
         goal: task.goal,
         created_by: match task.created_by {
             af_task::TaskCreatedBy::Explicit => TaskCreatedBy::Explicit as i32,
-            af_task::TaskCreatedBy::Invoke => TaskCreatedBy::Invoke as i32,
         },
         trace_id: task.trace_id,
         limits_json: task.limits_json,
@@ -692,6 +714,7 @@ mod tests {
                     .clone(),
                 goal: Some("work".to_string()),
                 limits_json: Some("{\"max_steps\":1}".to_string()),
+                operation: Some(test_task_operation()),
             }),
         });
         let create_task_payload = match create_task_response.outcome {
@@ -806,6 +829,7 @@ mod tests {
                 rebind_token: "token-1".to_string(),
                 goal: None,
                 limits_json: None,
+                operation: Some(test_task_operation()),
             }),
         });
 
@@ -815,6 +839,49 @@ mod tests {
         };
         assert_eq!(error.code, RpcErrorCode::InvalidSessionState as i32);
         assert!(error.message.contains("expired"));
+    }
+
+    #[test]
+    fn create_task_rejects_missing_operation() {
+        let store = Arc::new(Store::open(StoreOptions::in_memory()).expect("open store"));
+        let controller = RpcController::new("daemon-1".to_string(), store.clone());
+
+        let session_response = controller.dispatch(RpcRequest {
+            method: RpcMethod::CreateSession as i32,
+            payload: encode_message(&CreateSessionRequest {
+                agent_name: "agent-1".to_string(),
+                client_instance_id: "client-1".to_string(),
+                lease_ttl_secs: Some(30),
+            }),
+        });
+        let session_payload = match session_response.outcome {
+            Some(rpc_response::Outcome::Payload(payload)) => payload,
+            other => panic!("expected payload response, got {other:?}"),
+        };
+        let created_session = decode_message::<CreateSessionResponse>(&session_payload)
+            .expect("decode create session response")
+            .session
+            .expect("session must exist");
+        let lease = created_session.lease.expect("lease must exist");
+
+        let response = controller.dispatch(RpcRequest {
+            method: RpcMethod::CreateTask as i32,
+            payload: encode_message(&CreateTaskRequest {
+                session_id: created_session.session_id,
+                client_instance_id: lease.client_instance_id,
+                rebind_token: lease.rebind_token,
+                goal: None,
+                limits_json: None,
+                operation: None,
+            }),
+        });
+
+        let error = match response.outcome {
+            Some(rpc_response::Outcome::Error(error)) => error,
+            other => panic!("expected error response, got {other:?}"),
+        };
+        assert_eq!(error.code, RpcErrorCode::BadRequest as i32);
+        assert!(error.message.contains("operation"));
     }
 
     #[test]
@@ -846,7 +913,7 @@ mod tests {
                 session_id: created_session.session_id.clone(),
                 status: DomainTaskStatus::Blocked,
                 goal: Some("wait approval".to_string()),
-                created_by: TaskCreatedBy::Invoke,
+                created_by: TaskCreatedBy::Explicit,
                 trace_id: "trace-approval-1".to_string(),
                 limits_json: None,
                 current_step: 0,
@@ -952,6 +1019,15 @@ mod tests {
                 .iter()
                 .any(|event| event.event_type == AuditEventType::InvocationResumedAfterApproval)
         );
+    }
+
+    fn test_task_operation() -> af_rpc_proto::TaskOperation {
+        af_rpc_proto::TaskOperation {
+            kind: "exec".to_string(),
+            payload: None,
+            options: None,
+            labels: Default::default(),
+        }
     }
 
     #[test]

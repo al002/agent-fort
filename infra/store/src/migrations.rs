@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
   status TEXT NOT NULL CHECK (status IN ('PENDING', 'RUNNING', 'BLOCKED', 'COMPLETED', 'FAILED', 'CANCELLED')),
   goal TEXT,
-  created_by TEXT NOT NULL CHECK (created_by IN ('EXPLICIT', 'INVOKE')),
+  created_by TEXT NOT NULL CHECK (created_by IN ('EXPLICIT')),
   trace_id TEXT NOT NULL,
   limits_json TEXT CHECK (limits_json IS NULL OR json_valid(limits_json)),
   current_step INTEGER NOT NULL,

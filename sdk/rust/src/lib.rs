@@ -18,3 +18,5 @@ pub use error::{Result, SdkError};
 pub use runtime::{CreateSessionOptions, RuntimeClient};
 pub use session::SessionClient;
 pub use task::TaskClient;
+
+pub use af_rpc_proto::TaskOperation;

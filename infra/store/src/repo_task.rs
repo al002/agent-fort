@@ -361,14 +361,12 @@ pub(crate) fn task_status_from_db(status: &str) -> StoreResult<TaskStatus> {
 pub(crate) fn task_created_by_to_db(created_by: TaskCreatedBy) -> &'static str {
     match created_by {
         TaskCreatedBy::Explicit => "EXPLICIT",
-        TaskCreatedBy::Invoke => "INVOKE",
     }
 }
 
 pub(crate) fn task_created_by_from_db(created_by: &str) -> StoreResult<TaskCreatedBy> {
     match created_by {
         "EXPLICIT" => Ok(TaskCreatedBy::Explicit),
-        "INVOKE" => Ok(TaskCreatedBy::Invoke),
         _ => Err(StoreError::Internal(format!(
             "invalid task created_by in db: {created_by}"
         ))),

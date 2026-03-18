@@ -11,7 +11,6 @@ pub enum TaskStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskCreatedBy {
     Explicit,
-    Invoke,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

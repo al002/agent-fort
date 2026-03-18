@@ -107,7 +107,12 @@ fn respond_with_effect(
         let next_task = transition_task_for_approval(&tx, &task, &approval, &command)?;
         append_approval_audit_event(&tx, &approval, &command)?;
         if next_task.status != task.status {
-            append_invocation_audit_event(&tx, &approval, command.decision, command.responded_at_ms)?;
+            append_invocation_audit_event(
+                &tx,
+                &approval,
+                command.decision,
+                command.responded_at_ms,
+            )?;
         }
         next_task
     } else {

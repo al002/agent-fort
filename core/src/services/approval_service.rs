@@ -130,7 +130,7 @@ mod tests {
                     session_id: "session-1".to_string(),
                     status: af_task::TaskStatus::Pending,
                     goal: None,
-                    created_by: af_task::TaskCreatedBy::Invoke,
+                    created_by: af_task::TaskCreatedBy::Explicit,
                     trace_id: "trace-1".to_string(),
                     limits_json: None,
                     current_step: 0,

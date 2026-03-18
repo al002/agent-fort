@@ -76,7 +76,9 @@ impl SandboxRuntime for LinuxSandboxRuntime {
         } = self.build_command(&request, wrap_with_bwrap)?;
 
         let rlimit_plan = RlimitPlan::from_limits(&request.limits).map_err(|err| {
-            SandboxError::InvalidRequest(format!("invalid resource limits for this platform: {err}"))
+            SandboxError::InvalidRequest(format!(
+                "invalid resource limits for this platform: {err}"
+            ))
         })?;
         let apply_runtime_seccomp =
             !wrap_with_bwrap && request.syscall_policy != SyscallPolicy::Unconfined;

@@ -1,8 +1,9 @@
 use af_rpc_proto::codec::{decode_message, encode_message};
 use af_rpc_proto::{
-    ApprovalDecision, CreateSessionRequest, CreateSessionResponse, GetApprovalRequest,
-    GetApprovalResponse, PingRequest, PingResponse, RespondApprovalRequest,
-    RespondApprovalResponse, RpcErrorCode, RpcMethod, RpcRequest, RpcResponse, rpc_response,
+    ApprovalDecision, CreateSessionRequest, CreateSessionResponse, CreateTaskRequest,
+    CreateTaskResponse, GetApprovalRequest, GetApprovalResponse, PingRequest, PingResponse,
+    RespondApprovalRequest, RespondApprovalResponse, RpcErrorCode, RpcMethod, RpcRequest,
+    RpcResponse, TaskOperation, rpc_response,
 };
 use af_rpc_transport::{Endpoint, RpcClient};
 use uuid::Uuid;
@@ -88,6 +89,30 @@ impl RuntimeClient {
             .await?;
         decode_message::<CreateSessionResponse>(&payload).map_err(|error| {
             SdkError::Protocol(format!("decode CreateSessionResponse failed: {error}"))
+        })
+    }
+
+    pub async fn create_task(
+        &mut self,
+        session_id: String,
+        rebind_token: String,
+        operation: TaskOperation,
+        goal: Option<String>,
+        limits_json: Option<String>,
+    ) -> Result<CreateTaskResponse> {
+        let request = CreateTaskRequest {
+            session_id,
+            client_instance_id: self.client_instance_id.clone(),
+            rebind_token,
+            goal,
+            limits_json,
+            operation: Some(operation),
+        };
+        let payload = self
+            .call_rpc(RpcMethod::CreateTask, encode_message(&request))
+            .await?;
+        decode_message::<CreateTaskResponse>(&payload).map_err(|error| {
+            SdkError::Protocol(format!("decode CreateTaskResponse failed: {error}"))
         })
     }
 

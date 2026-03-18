@@ -2,6 +2,9 @@ syntax = "proto3";
 
 package agent.fort.v1;
 
+import "agent/fort/v1/common.proto";
+import "google/protobuf/struct.proto";
+
 enum TaskStatus {
   TASK_STATUS_UNSPECIFIED = 0;
   TASK_STATUS_PENDING = 1;
@@ -15,7 +18,44 @@ enum TaskStatus {
 enum TaskCreatedBy {
   TASK_CREATED_BY_UNSPECIFIED = 0;
   TASK_CREATED_BY_EXPLICIT = 1;
-  TASK_CREATED_BY_INVOKE = 2;
+}
+
+message TaskOperation {
+  string kind = 1;
+  google.protobuf.Struct payload = 2;
+  google.protobuf.Struct options = 3;
+  map<string, string> labels = 4;
+}
+
+message ExecutionResult {
+  string state = 1;
+  optional int32 exit_code = 2;
+  bool timed_out = 3;
+  string stdout = 4;
+  string stderr = 5;
+  bool stdout_truncated = 6;
+  bool stderr_truncated = 7;
+}
+
+message PendingApproval {
+  string approval_id = 1;
+  ApprovalStatus status = 2;
+  uint64 expires_at_ms = 3;
+  string task_id = 4;
+  string summary = 5;
+}
+
+message TaskDenied {
+  optional string code = 1;
+  optional string message = 2;
+}
+
+message TaskOutcome {
+  oneof outcome {
+    ExecutionResult execution = 1;
+    PendingApproval approval = 2;
+    TaskDenied denied = 3;
+  }
 }
 
 message Task {
@@ -40,10 +80,12 @@ message CreateTaskRequest {
   string rebind_token = 3;
   optional string goal = 4;
   optional string limits_json = 5;
+  TaskOperation operation = 6;
 }
 
 message CreateTaskResponse {
   Task task = 1;
+  TaskOutcome outcome = 2;
 }
 
 message GetTaskRequest {

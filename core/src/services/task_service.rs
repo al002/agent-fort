@@ -243,12 +243,12 @@ mod tests {
                 session_id: "s-1".to_string(),
                 goal: Some("do".to_string()),
                 limits_json: Some("{\"max_steps\":1}".to_string()),
-                created_by: TaskCreatedBy::Invoke,
+                created_by: TaskCreatedBy::Explicit,
             })
             .expect("create task");
 
         assert_eq!(task.status, TaskStatus::Pending);
-        assert_eq!(task.created_by, TaskCreatedBy::Invoke);
+        assert_eq!(task.created_by, TaskCreatedBy::Explicit);
 
         let write = port
             .last_create

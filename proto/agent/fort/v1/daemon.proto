@@ -6,7 +6,6 @@ import "agent/fort/v1/approval.proto";
 import "agent/fort/v1/common.proto";
 import "agent/fort/v1/session.proto";
 import "agent/fort/v1/task.proto";
-import "google/protobuf/struct.proto";
 
 enum RpcMethod {
   RPC_METHOD_UNSPECIFIED = 0;
@@ -15,7 +14,6 @@ enum RpcMethod {
   RPC_METHOD_CREATE_SESSION = 3;
   RPC_METHOD_RENEW_LEASE = 4;
   RPC_METHOD_KEEPALIVE = 5;
-  RPC_METHOD_INVOKE = 6;
   RPC_METHOD_GET_SESSION = 7;
   RPC_METHOD_TERMINATE_SESSION = 8;
   RPC_METHOD_CREATE_TASK = 9;
@@ -50,33 +48,12 @@ message GetDaemonInfoResponse {
   DaemonInfo info = 1;
 }
 
-message OperationRequest {
-  string kind = 1;
-  google.protobuf.Struct payload = 2;
-  google.protobuf.Struct options = 3;
-  map<string, string> labels = 4;
-}
-
-message InvokeRequest {
-  string session_id = 1;
-  string client_instance_id = 2;
-  string rebind_token = 3;
-  OperationRequest operation = 4;
-  optional string goal = 5;
-  optional string limits_json = 6;
-}
-
-message InvokeResponse {
-  InvokeResult result = 1;
-}
-
 service AgentFortService {
   rpc Ping(PingRequest) returns (PingResponse);
   rpc GetDaemonInfo(GetDaemonInfoRequest) returns (GetDaemonInfoResponse);
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
   rpc RenewLease(RenewLeaseRequest) returns (RenewLeaseResponse);
   rpc Keepalive(KeepaliveRequest) returns (KeepaliveResponse);
-  rpc Invoke(InvokeRequest) returns (InvokeResponse);
   rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
   rpc TerminateSession(TerminateSessionRequest) returns (TerminateSessionResponse);
   rpc CreateTask(CreateTaskRequest) returns (CreateTaskResponse);

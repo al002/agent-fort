@@ -17,7 +17,7 @@ use af_rpc_proto::{
     RpcResponse, Session, SessionLease, SessionStatus, Task, TaskCreatedBy, TaskStatus,
     rpc_response,
 };
-use af_rpc_transport::RpcConnection;
+use af_rpc_transport::{RpcConnection, TransportError};
 use af_session::{SessionRepository, SessionRepositoryError, SessionStatus as DomainSessionStatus};
 use af_store::Store;
 use af_task::TaskCreatedBy as DomainTaskCreatedBy;
@@ -73,16 +73,46 @@ impl RpcController {
     }
 
     pub async fn handle_connection(&self, mut connection: RpcConnection) -> Result<()> {
-        let request: RpcRequest = connection.read_message().await?;
-        let controller = self.clone();
-        let response = tokio::task::spawn_blocking(move || -> Result<RpcResponse> {
-            controller.state.store.ping()?;
-            Ok(controller.dispatch(request))
-        })
-        .await
-        .context("join rpc dispatch task")??;
-        connection.write_message(&response).await?;
-        Ok(())
+        loop {
+            let request: RpcRequest = match connection.read_message().await {
+                Ok(request) => request,
+                Err(TransportError::Io(error))
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::UnexpectedEof
+                            | std::io::ErrorKind::ConnectionReset
+                            | std::io::ErrorKind::BrokenPipe
+                    ) =>
+                {
+                    return Ok(());
+                }
+                Err(error) => return Err(error.into()),
+            };
+
+            let controller = self.clone();
+            let response = tokio::task::spawn_blocking(move || -> Result<RpcResponse> {
+                controller.state.store.ping()?;
+                Ok(controller.dispatch(request))
+            })
+            .await
+            .context("join rpc dispatch task")??;
+
+            if let Err(error) = connection.write_message(&response).await {
+                match error {
+                    TransportError::Io(io_error)
+                        if matches!(
+                            io_error.kind(),
+                            std::io::ErrorKind::UnexpectedEof
+                                | std::io::ErrorKind::ConnectionReset
+                                | std::io::ErrorKind::BrokenPipe
+                        ) =>
+                    {
+                        return Ok(());
+                    }
+                    other => return Err(other.into()),
+                }
+            }
+        }
     }
 
     fn dispatch(&self, request: RpcRequest) -> RpcResponse {
@@ -574,9 +604,11 @@ mod tests {
     use super::*;
     use af_approval::{ApprovalItem, ApprovalRepository, ApprovalStatus, NewApproval};
     use af_audit::{AuditCursor, AuditEventType, AuditRepository};
+    use af_rpc_transport::{Endpoint, RpcClient, RpcServer};
     use af_session::{NewSession, SessionLease, SessionRepository};
     use af_store::StoreOptions;
     use af_task::{NewTask, TaskCreatedBy, TaskRepository, TaskStatus as DomainTaskStatus};
+    use tempfile::TempDir;
 
     #[test]
     fn create_session_dispatch_returns_session_and_audit() {
@@ -935,5 +967,49 @@ mod tests {
             other => panic!("expected error response, got {other:?}"),
         };
         assert_eq!(error.code, RpcErrorCode::BadRequest as i32);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires unix socket bind capability"]
+    async fn handles_multiple_requests_over_single_connection() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let socket_path = temp_dir.path().join("rpc.sock");
+        let endpoint = Endpoint::parse(&format!("unix://{}", socket_path.display()))
+            .expect("parse unix endpoint");
+
+        let store = Arc::new(Store::open(StoreOptions::in_memory()).expect("open store"));
+        let controller = RpcController::new("daemon-1".to_string(), store);
+        let server = RpcServer::bind(endpoint.clone()).expect("bind rpc server");
+
+        let server_task = tokio::spawn(async move {
+            let connection = server.accept().await.expect("accept connection");
+            controller
+                .handle_connection(connection)
+                .await
+                .expect("handle connection");
+        });
+
+        let mut client = RpcClient::connect(endpoint)
+            .await
+            .expect("connect rpc client");
+        let request = RpcRequest {
+            method: RpcMethod::Ping as i32,
+            payload: encode_message(&PingRequest {}),
+        };
+
+        for _ in 0..2 {
+            let response: RpcResponse = client.roundtrip(&request).await.expect("ping roundtrip");
+            let payload = match response.outcome {
+                Some(rpc_response::Outcome::Payload(payload)) => payload,
+                other => panic!("expected payload response, got {other:?}"),
+            };
+            let ping = decode_message::<PingResponse>(&payload).expect("decode ping response");
+            assert_eq!(ping.status, "ok");
+            assert_eq!(ping.daemon_instance_id, "daemon-1");
+        }
+
+        drop(client);
+        server_task.await.expect("server task should finish");
     }
 }

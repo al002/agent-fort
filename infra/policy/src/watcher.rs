@@ -37,11 +37,11 @@ impl PolicyDirectoryWatcher {
                 Err(_) => return Err(PolicyInfraError::WatchChannelClosed),
             }
 
-            return Ok(Self {
+            Ok(Self {
                 receiver: rx,
                 shutdown_write_fd,
                 thread: Some(thread),
-            });
+            })
         }
 
         #[cfg(not(target_os = "linux"))]
@@ -163,10 +163,32 @@ impl LinuxWatcherState {
             let mut paths = Vec::new();
             let mut refresh_watches = false;
             let mut offset = 0usize;
+            let header_len = std::mem::size_of::<libc::inotify_event>();
             while offset < read_len {
+                if read_len - offset < header_len {
+                    return Err(PolicyInfraError::WatchBackend {
+                        message: format!(
+                            "malformed inotify payload: trailing bytes at offset {offset}"
+                        ),
+                    });
+                }
+
                 let event = read_inotify_event(&buffer, offset);
-                let next_offset =
-                    offset + std::mem::size_of::<libc::inotify_event>() + event.len as usize;
+                let next_offset = offset
+                    .checked_add(header_len)
+                    .and_then(|value| value.checked_add(event.len as usize))
+                    .ok_or_else(|| PolicyInfraError::WatchBackend {
+                        message: format!(
+                            "malformed inotify payload: event size overflow at offset {offset}"
+                        ),
+                    })?;
+                if next_offset > read_len {
+                    return Err(PolicyInfraError::WatchBackend {
+                        message: format!(
+                            "malformed inotify payload: event at offset {offset} exceeds read size {read_len}"
+                        ),
+                    });
+                }
 
                 if event.mask & libc::IN_Q_OVERFLOW != 0 {
                     paths.push(self.root.clone());
@@ -181,11 +203,6 @@ impl LinuxWatcherState {
                 };
 
                 if affects_policy_root(&self.root, &path) && is_mutating_event(event.mask) {
-                    paths.push(path.clone());
-                    refresh_watches = true;
-                } else if path == self.root
-                    && event.mask & (libc::IN_DELETE_SELF | libc::IN_MOVE_SELF) != 0
-                {
                     paths.push(path.clone());
                     refresh_watches = true;
                 }
@@ -244,7 +261,8 @@ impl LinuxWatcherState {
         }
 
         let name_offset = offset + std::mem::size_of::<libc::inotify_event>();
-        let name_bytes = &buffer[name_offset..name_offset + event.len as usize];
+        let name_end = name_offset.checked_add(event.len as usize)?;
+        let name_bytes = buffer.get(name_offset..name_end)?;
         let name_len = name_bytes
             .iter()
             .position(|byte| *byte == 0)
@@ -377,18 +395,7 @@ fn add_watch(inotify_fd: i32, path: &Path) -> PolicyInfraResult<i32> {
 
 #[cfg(target_os = "linux")]
 fn remove_watch(inotify_fd: i32, descriptor: i32) {
-    let rc = unsafe { libc::inotify_rm_watch(inotify_fd, descriptor) };
-    if rc == 0 {
-        return;
-    }
-
-    let error = last_os_error();
-    if matches!(
-        error.raw_os_error(),
-        Some(libc::EINVAL) | Some(libc::ENOENT) | Some(libc::EBADF)
-    ) {
-        return;
-    }
+    let _ = unsafe { libc::inotify_rm_watch(inotify_fd, descriptor) };
 }
 
 #[cfg(target_os = "linux")]

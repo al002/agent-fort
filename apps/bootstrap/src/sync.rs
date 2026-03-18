@@ -88,6 +88,7 @@ pub fn run(args: SyncArgs) -> Result<SyncOutput> {
     let helper_path = extracted_root.join(helper_rel_path);
     ensure_file(&daemon_path, "daemon binary")?;
     ensure_file(&bwrap_path, "bwrap binary")?;
+    ensure_file(&helper_path, "helper binary")?;
 
     let endpoint = resolve_endpoint(args.endpoint, None);
     let state = InstallState {

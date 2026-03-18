@@ -8,6 +8,7 @@ af-audit = { path = "../domain/audit" }
 af-policy = { path = "../domain/policy" }
 af-policy-infra = { path = "../infra/policy" }
 af-session = { path = "../domain/session" }
+af-task = { path = "../domain/task" }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }

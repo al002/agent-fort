@@ -2,9 +2,9 @@ use af_task::{
     AdvanceTaskStepCommand, NewTask, Task, TaskCreatedBy, TaskRepository, TaskRepositoryError,
     TaskStatus, UpdateTaskStatusCommand,
 };
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::{Store, StoreError, StoreResult, is_dup_key, sql_err, storage_msg, to_i64, to_u64};
+use crate::{is_dup_key, sql_err, storage_msg, to_i64, to_u64, Store, StoreError, StoreResult};
 
 impl TaskRepository for Store {
     fn create_task(&self, command: NewTask) -> Result<Task, TaskRepositoryError> {
@@ -231,7 +231,7 @@ fn set_step(connection: &mut Connection, command: AdvanceTaskStepCommand) -> Sto
         .ok_or_else(|| StoreError::Internal("updated task missing after step advance".to_string()))
 }
 
-fn load_task(
+pub(crate) fn load_task(
     connection: &Connection,
     session_id: &str,
     task_id: &str,
@@ -333,7 +333,7 @@ fn row_to_raw_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawTask> {
     })
 }
 
-fn task_status_to_db(status: TaskStatus) -> &'static str {
+pub(crate) fn task_status_to_db(status: TaskStatus) -> &'static str {
     match status {
         TaskStatus::Pending => "PENDING",
         TaskStatus::Running => "RUNNING",
@@ -344,7 +344,7 @@ fn task_status_to_db(status: TaskStatus) -> &'static str {
     }
 }
 
-fn task_status_from_db(status: &str) -> StoreResult<TaskStatus> {
+pub(crate) fn task_status_from_db(status: &str) -> StoreResult<TaskStatus> {
     match status {
         "PENDING" => Ok(TaskStatus::Pending),
         "RUNNING" => Ok(TaskStatus::Running),
@@ -358,14 +358,14 @@ fn task_status_from_db(status: &str) -> StoreResult<TaskStatus> {
     }
 }
 
-fn task_created_by_to_db(created_by: TaskCreatedBy) -> &'static str {
+pub(crate) fn task_created_by_to_db(created_by: TaskCreatedBy) -> &'static str {
     match created_by {
         TaskCreatedBy::Explicit => "EXPLICIT",
         TaskCreatedBy::Invoke => "INVOKE",
     }
 }
 
-fn task_created_by_from_db(created_by: &str) -> StoreResult<TaskCreatedBy> {
+pub(crate) fn task_created_by_from_db(created_by: &str) -> StoreResult<TaskCreatedBy> {
     match created_by {
         "EXPLICIT" => Ok(TaskCreatedBy::Explicit),
         "INVOKE" => Ok(TaskCreatedBy::Invoke),

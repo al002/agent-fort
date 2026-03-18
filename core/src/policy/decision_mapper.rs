@@ -1,5 +1,6 @@
 use af_policy::{PolicyApproval, PolicyDecision, PolicyRuleKind};
 use af_policy_infra::CompiledRule;
+use serde_json::{json, Value};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionContract {
@@ -10,6 +11,7 @@ pub struct ExecutionContract {
     pub approval: Option<PolicyApproval>,
     pub policy_revision: u64,
     pub matched_rule: Option<MatchedRuleInfo>,
+    pub evaluation_trace: PolicyEvaluationTrace,
     pub fail_closed: bool,
 }
 
@@ -22,6 +24,39 @@ pub struct MatchedRuleInfo {
     pub rule_index: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyEvaluationTrace {
+    pub candidate_rule_count: usize,
+    pub matched_rule_ids: Vec<String>,
+}
+
+impl PolicyEvaluationTrace {
+    pub fn new(candidate_rule_count: usize, matched_rule_ids: Vec<String>) -> Self {
+        Self {
+            candidate_rule_count,
+            matched_rule_ids,
+        }
+    }
+}
+
+impl ExecutionContract {
+    pub fn policy_audit_payload(&self) -> Value {
+        json!({
+            "candidate_rule_count": self.evaluation_trace.candidate_rule_count,
+            "matched_rule_ids": self.evaluation_trace.matched_rule_ids,
+            "final_decision": decision_to_str(self.decision),
+            "reason": self.reason,
+            "approval_summary": self.approval.as_ref().map(|approval| approval.summary.clone()),
+            "policy_revision": self.policy_revision,
+            "fail_closed": self.fail_closed,
+        })
+    }
+
+    pub fn policy_audit_payload_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(&self.policy_audit_payload())
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DecisionMapper;
 
@@ -30,6 +65,7 @@ impl DecisionMapper {
         &self,
         compiled_rule: &CompiledRule,
         revision: u64,
+        trace: PolicyEvaluationTrace,
     ) -> ExecutionContract {
         ExecutionContract {
             decision: compiled_rule.rule.effect.decision,
@@ -45,11 +81,12 @@ impl DecisionMapper {
                 relative_path: compiled_rule.source.relative_path.clone(),
                 rule_index: compiled_rule.source.rule_index,
             }),
+            evaluation_trace: trace,
             fail_closed: false,
         }
     }
 
-    pub fn map_no_match(&self, revision: u64) -> ExecutionContract {
+    pub fn map_no_match(&self, revision: u64, trace: PolicyEvaluationTrace) -> ExecutionContract {
         ExecutionContract {
             decision: PolicyDecision::Allow,
             reason: Some("no policy rule matched".to_string()),
@@ -58,11 +95,17 @@ impl DecisionMapper {
             approval: None,
             policy_revision: revision,
             matched_rule: None,
+            evaluation_trace: trace,
             fail_closed: false,
         }
     }
 
-    pub fn map_fail_closed(&self, revision: u64, reason: impl Into<String>) -> ExecutionContract {
+    pub fn map_fail_closed(
+        &self,
+        revision: u64,
+        reason: impl Into<String>,
+        trace: PolicyEvaluationTrace,
+    ) -> ExecutionContract {
         ExecutionContract {
             decision: PolicyDecision::Forbid,
             reason: Some(reason.into()),
@@ -71,7 +114,17 @@ impl DecisionMapper {
             approval: None,
             policy_revision: revision,
             matched_rule: None,
+            evaluation_trace: trace,
             fail_closed: true,
         }
+    }
+}
+
+fn decision_to_str(decision: PolicyDecision) -> &'static str {
+    match decision {
+        PolicyDecision::Allow => "allow",
+        PolicyDecision::Ask => "ask",
+        PolicyDecision::Deny => "deny",
+        PolicyDecision::Forbid => "forbid",
     }
 }

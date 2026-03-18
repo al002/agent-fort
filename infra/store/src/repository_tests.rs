@@ -5,7 +5,10 @@ use af_approval::{
     ListPendingApprovalsQuery, NewApproval, RespondApprovalCommand,
 };
 use af_audit::{AuditCursor, AuditEventType, AuditRepository, NewAuditEvent};
-use af_core::{CreateSessionInput, SessionAppService, SessionConfig};
+use af_core::{
+    CancelTaskInput, CreateSessionInput, CreateTaskInput, SessionAppService, SessionConfig,
+    TaskAppService,
+};
 use af_session::{
     NewSession, RenewLeaseCommand, SessionLease, SessionRepository, SessionStatus,
     TerminateSessionCommand,
@@ -337,6 +340,55 @@ fn create_session_service_writes_session_and_audit_atomically() {
         .expect("list session audit events");
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].event_type, AuditEventType::SessionCreated);
+}
+
+#[test]
+fn task_service_writes_task_and_audit_atomically() {
+    let store = Arc::new(Store::open(StoreOptions::in_memory()).expect("open in-memory store"));
+    create_base_session(&store, "session-1");
+    let service = TaskAppService::new(store.clone());
+
+    let created = service
+        .create_task(CreateTaskInput {
+            session_id: "session-1".to_string(),
+            goal: Some("ship".to_string()),
+            limits_json: Some("{\"max_steps\":1}".to_string()),
+            created_by: TaskCreatedBy::Explicit,
+        })
+        .expect("create task");
+    assert_eq!(created.status, TaskStatus::Pending);
+
+    let after_create = store
+        .list_by_task(
+            &created.task_id,
+            AuditCursor {
+                after_seq: None,
+                limit: 10,
+            },
+        )
+        .expect("list task audit after create");
+    assert_eq!(after_create.len(), 1);
+    assert_eq!(after_create[0].event_type, AuditEventType::TaskCreated);
+
+    let cancelled = service
+        .cancel_task(CancelTaskInput {
+            session_id: created.session_id.clone(),
+            task_id: created.task_id.clone(),
+        })
+        .expect("cancel task");
+    assert_eq!(cancelled.status, TaskStatus::Cancelled);
+
+    let after_cancel = store
+        .list_by_task(
+            &created.task_id,
+            AuditCursor {
+                after_seq: None,
+                limit: 10,
+            },
+        )
+        .expect("list task audit after cancel");
+    assert_eq!(after_cancel.len(), 2);
+    assert_eq!(after_cancel[1].event_type, AuditEventType::TaskCancelled);
 }
 
 fn create_base_session(store: &Store, session_id: &str) {

@@ -5,6 +5,7 @@ mod repo_audit;
 mod repo_session;
 mod repo_session_tx;
 mod repo_task;
+mod repo_task_tx;
 mod sql_audit;
 mod sql_session;
 mod worker;

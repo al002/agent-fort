@@ -5,7 +5,10 @@ use thiserror::Error;
 
 use crate::operation::NormalizedOperation;
 
-use super::{CelContextBuilder, DecisionMapper, ExecutionContract, RuleMatchFilter, RuleSorter};
+use super::{
+    CelContextBuilder, DecisionMapper, ExecutionContract, PolicyEvaluationTrace, RuleMatchFilter,
+    RuleSorter,
+};
 
 #[derive(Debug, Clone)]
 pub struct PolicyEvaluator {
@@ -32,11 +35,13 @@ impl PolicyEvaluator {
         compiled: &CompiledPolicies,
         operation: &NormalizedOperation,
     ) -> ExecutionContract {
-        match self.try_evaluate(compiled, operation) {
+        match self.try_evaluate_with_trace(compiled, operation) {
             Ok(contract) => contract,
-            Err(error) => self
-                .decision_mapper
-                .map_fail_closed(compiled.revision, error.to_string()),
+            Err(error) => self.decision_mapper.map_fail_closed(
+                compiled.revision,
+                error.error.to_string(),
+                error.trace,
+            ),
         }
     }
 
@@ -45,28 +50,53 @@ impl PolicyEvaluator {
         compiled: &CompiledPolicies,
         operation: &NormalizedOperation,
     ) -> Result<ExecutionContract, PolicyEvaluationError> {
+        self.try_evaluate_with_trace(compiled, operation)
+            .map_err(|error| error.error)
+    }
+
+    fn try_evaluate_with_trace(
+        &self,
+        compiled: &CompiledPolicies,
+        operation: &NormalizedOperation,
+    ) -> Result<ExecutionContract, PolicyEvaluationFailure> {
         let mut candidates = compiled
             .rules
             .iter()
             .filter(|rule| self.rule_match_filter.matches_rule(&rule.rule, operation))
             .collect::<Vec<_>>();
 
+        let candidate_rule_count = candidates.len();
         candidates.sort_by(|left, right| self.compare_compiled_rules(left, right));
 
         let context = self.context_builder.build(operation);
+        let mut matched_rule_ids = Vec::new();
         for rule in candidates {
             let matched = rule
                 .evaluate(&context)
-                .map_err(|error| PolicyEvaluationError::CelEvaluation {
-                    rule_id: rule.rule.id.clone(),
-                    message: error.to_string(),
+                .map_err(|error| PolicyEvaluationFailure {
+                    error: PolicyEvaluationError::CelEvaluation {
+                        rule_id: rule.rule.id.clone(),
+                        message: error.to_string(),
+                    },
+                    trace: PolicyEvaluationTrace::new(
+                        candidate_rule_count,
+                        matched_rule_ids.clone(),
+                    ),
                 })?;
             if matched {
-                return Ok(self.decision_mapper.map_matched_rule(rule, compiled.revision));
+                matched_rule_ids.push(rule.rule.id.clone());
+                return Ok(self.decision_mapper.map_matched_rule(
+                    rule,
+                    compiled.revision,
+                    PolicyEvaluationTrace::new(candidate_rule_count, matched_rule_ids),
+                ));
             }
         }
 
-        Ok(self.decision_mapper.map_no_match(compiled.revision))
+        Ok(self.decision_mapper.map_no_match(
+            compiled.revision,
+            PolicyEvaluationTrace::new(candidate_rule_count, matched_rule_ids),
+        ))
     }
 
     fn compare_compiled_rules(&self, left: &CompiledRule, right: &CompiledRule) -> Ordering {
@@ -81,13 +111,20 @@ pub enum PolicyEvaluationError {
     CelEvaluation { rule_id: String, message: String },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PolicyEvaluationFailure {
+    error: PolicyEvaluationError,
+    trace: PolicyEvaluationTrace,
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
     use af_policy::{
-        LoadedPolicies, LoadedRule, PolicyApproval, PolicyApprovalItem, PolicyDecision, PolicyDirectorySnapshot,
-        PolicyEffect, PolicyFile, PolicyMatch, PolicyRule, PolicyRuleKind, RuleSource,
+        LoadedPolicies, LoadedRule, PolicyApproval, PolicyApprovalItem, PolicyDecision,
+        PolicyDirectorySnapshot, PolicyEffect, PolicyFile, PolicyMatch, PolicyRule, PolicyRuleKind,
+        RuleSource,
     };
     use af_policy_infra::CelCompiler;
 
@@ -157,6 +194,16 @@ mod tests {
             contract.matched_rule.as_ref().map(|rule| rule.id.as_str()),
             Some("ask")
         );
+        assert_eq!(contract.evaluation_trace.candidate_rule_count, 2);
+        assert_eq!(
+            contract.evaluation_trace.matched_rule_ids,
+            vec!["ask".to_string()]
+        );
+        let payload = contract.policy_audit_payload();
+        assert_eq!(payload["candidate_rule_count"], 2);
+        assert_eq!(payload["matched_rule_ids"][0], "ask");
+        assert_eq!(payload["final_decision"], "ask");
+        assert_eq!(payload["policy_revision"], 1);
         assert!(!contract.fail_closed);
     }
 
@@ -186,6 +233,8 @@ mod tests {
         let contract = PolicyEvaluator::default().evaluate(&compiled, &fetch_operation());
         assert_eq!(contract.decision, PolicyDecision::Allow);
         assert!(contract.matched_rule.is_none());
+        assert_eq!(contract.evaluation_trace.candidate_rule_count, 0);
+        assert!(contract.evaluation_trace.matched_rule_ids.is_empty());
         assert!(!contract.fail_closed);
     }
 
@@ -214,6 +263,8 @@ mod tests {
 
         let contract = PolicyEvaluator::default().evaluate(&compiled, &fetch_operation());
         assert_eq!(contract.decision, PolicyDecision::Forbid);
+        assert_eq!(contract.evaluation_trace.candidate_rule_count, 1);
+        assert!(contract.evaluation_trace.matched_rule_ids.is_empty());
         assert!(contract.fail_closed);
         assert!(contract
             .reason

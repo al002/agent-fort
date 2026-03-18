@@ -11,6 +11,7 @@ af-audit = { path = "../../domain/audit" }
 af-sandbox = { path = "../../infra/sandbox" }
 af-policy-infra = { path = "../../infra/policy" }
 af-session = { path = "../../domain/session" }
+af-task = { path = "../../domain/task" }
 af-store = { path = "../../infra/store" }
 anyhow = { workspace = true }
 serde_json = { workspace = true }

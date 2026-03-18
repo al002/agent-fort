@@ -151,7 +151,7 @@ mod tests {
                 PolicyEffect {
                     decision: PolicyDecision::Allow,
                     reason: Some("allow network".to_string()),
-                    execution_profile: Some("workspace_write_with_network".to_string()),
+                    runtime_backend: Some("sandbox".to_string()),
                     requirements: vec!["audit".to_string()],
                     approval: None,
                 },
@@ -171,7 +171,7 @@ mod tests {
                 PolicyEffect {
                     decision: PolicyDecision::Ask,
                     reason: Some("needs approval".to_string()),
-                    execution_profile: None,
+                    runtime_backend: None,
                     requirements: Vec::new(),
                     approval: Some(PolicyApproval {
                         summary: "Need approval".to_string(),
@@ -224,7 +224,7 @@ mod tests {
             PolicyEffect {
                 decision: PolicyDecision::Deny,
                 reason: Some("write blocked".to_string()),
-                execution_profile: None,
+                runtime_backend: None,
                 requirements: Vec::new(),
                 approval: None,
             },
@@ -255,7 +255,7 @@ mod tests {
             PolicyEffect {
                 decision: PolicyDecision::Allow,
                 reason: None,
-                execution_profile: None,
+                runtime_backend: None,
                 requirements: Vec::new(),
                 approval: None,
             },
@@ -266,10 +266,12 @@ mod tests {
         assert_eq!(contract.evaluation_trace.candidate_rule_count, 1);
         assert!(contract.evaluation_trace.matched_rule_ids.is_empty());
         assert!(contract.fail_closed);
-        assert!(contract
-            .reason
-            .as_ref()
-            .is_some_and(|reason| reason.contains("broken")));
+        assert!(
+            contract
+                .reason
+                .as_ref()
+                .is_some_and(|reason| reason.contains("broken"))
+        );
     }
 
     fn compiled(rules: Vec<LoadedRule>) -> CompiledPolicies {

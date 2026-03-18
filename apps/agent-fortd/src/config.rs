@@ -14,7 +14,10 @@ const ENV_STORE_PATH: &str = "AF_STORE_PATH";
 const ENV_POLICY_DIR: &str = "AF_POLICY_DIR";
 const DEFAULT_DAEMON_ENDPOINT: &str = "/tmp/agent-fortd.sock";
 const DEFAULT_BWRAP_PATH: &str = "/usr/bin/bwrap";
-const DEFAULT_HELPER_PATH: &str = "helper";
+#[cfg(windows)]
+const DEFAULT_HELPER_FILE: &str = "af-helper.exe";
+#[cfg(not(windows))]
+const DEFAULT_HELPER_FILE: &str = "af-helper";
 
 #[derive(Debug, Clone)]
 pub struct DaemonConfig {
@@ -38,7 +41,7 @@ impl DaemonConfig {
             env::var(ENV_DAEMON_INSTANCE_ID).unwrap_or_else(|_| Uuid::new_v4().to_string());
         let helper_path = env::var(ENV_HELPER_PATH)
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(DEFAULT_HELPER_PATH));
+            .unwrap_or_else(|_| default_helper_path());
         let bwrap_path = env::var(ENV_BWRAP_PATH)
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from(DEFAULT_BWRAP_PATH));
@@ -74,6 +77,18 @@ fn default_policy_dir() -> PathBuf {
     std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
         .join("policies")
+}
+
+fn default_helper_path() -> PathBuf {
+    if let Ok(executable) = std::env::current_exe()
+        && let Some(parent) = executable.parent()
+    {
+        return parent.join(DEFAULT_HELPER_FILE);
+    }
+
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("/"))
+        .join(DEFAULT_HELPER_FILE)
 }
 
 fn resolve_policy_dir(path: PathBuf) -> Result<PathBuf> {
@@ -116,5 +131,10 @@ mod tests {
                 .expect("current directory is available")
                 .join("policies")
         );
+    }
+
+    #[test]
+    fn default_helper_path_is_absolute() {
+        assert!(default_helper_path().is_absolute());
     }
 }

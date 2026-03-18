@@ -520,8 +520,8 @@ mod tests {
 
     use af_sandbox::{
         FilesystemMode, FilesystemPolicy, NetworkPolicy, OutputCapturePolicy, PtyPolicy,
-        ResourceGovernanceMode, ResourceLimits, RuntimeClass, SandboxExecRequest, SandboxRuntime,
-        SyscallPolicy, TraceContext,
+        ResourceGovernanceMode, ResourceLimits, SandboxExecRequest, SandboxRuntime, SyscallPolicy,
+        TraceContext,
     };
 
     use super::LinuxSandboxRuntime;
@@ -531,7 +531,6 @@ mod tests {
             command,
             cwd: PathBuf::from("/tmp"),
             env: BTreeMap::new(),
-            runtime_class: RuntimeClass::FullAccess,
             filesystem: FilesystemPolicy {
                 mode: FilesystemMode::FullAccess,
                 include_platform_defaults: false,

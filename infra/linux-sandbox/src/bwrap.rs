@@ -223,8 +223,8 @@ mod tests {
 
     use af_sandbox::{
         FilesystemMode, FilesystemPolicy, NetworkPolicy, OutputCapturePolicy, PtyPolicy,
-        ResourceGovernanceMode, ResourceLimits, RuntimeClass, SandboxExecRequest, SyscallPolicy,
-        TraceContext, WritableRoot,
+        ResourceGovernanceMode, ResourceLimits, SandboxExecRequest, SyscallPolicy, TraceContext,
+        WritableRoot,
     };
 
     use super::{build_bwrap_args, should_wrap_with_bwrap};
@@ -234,7 +234,6 @@ mod tests {
             command: vec!["/bin/echo".to_string(), "ok".to_string()],
             cwd: "/tmp".into(),
             env: BTreeMap::new(),
-            runtime_class: RuntimeClass::Default,
             filesystem: FilesystemPolicy {
                 mode: FilesystemMode::ReadOnly,
                 include_platform_defaults: true,

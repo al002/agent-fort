@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -7,17 +7,11 @@ use thiserror::Error;
 
 pub type SandboxResult<T> = Result<T, SandboxError>;
 
+pub const MAX_CAPTURE_BYTES: usize = 16 * 1024 * 1024;
+pub const HELPER_MAX_REQUEST_BYTES: usize = 2 * 1024 * 1024;
+
 pub trait SandboxRuntime: Send + Sync {
     fn execute(&self, request: SandboxExecRequest) -> SandboxResult<SandboxExecResult>;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum RuntimeClass {
-    #[default]
-    Default,
-    ReadOnly,
-    WorkspaceWrite,
-    FullAccess,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -137,7 +131,6 @@ pub struct SandboxExecRequest {
     pub command: Vec<String>,
     pub cwd: PathBuf,
     pub env: BTreeMap<String, String>,
-    pub runtime_class: RuntimeClass,
     pub filesystem: FilesystemPolicy,
     pub network: NetworkPolicy,
     pub pty: PtyPolicy,
@@ -175,6 +168,18 @@ impl SandboxExecRequest {
             return Err(SandboxError::InvalidRequest(
                 "capture limits must be greater than 0".to_string(),
             ));
+        }
+        if self.capture.stdout_max_bytes > MAX_CAPTURE_BYTES {
+            return Err(SandboxError::InvalidRequest(format!(
+                "stdout_max_bytes exceeds max allowed ({MAX_CAPTURE_BYTES}): {}",
+                self.capture.stdout_max_bytes
+            )));
+        }
+        if self.capture.stderr_max_bytes > MAX_CAPTURE_BYTES {
+            return Err(SandboxError::InvalidRequest(format!(
+                "stderr_max_bytes exceeds max allowed ({MAX_CAPTURE_BYTES}): {}",
+                self.capture.stderr_max_bytes
+            )));
         }
         if let Some(value) = self.limits.max_memory_bytes
             && value == 0
@@ -229,11 +234,13 @@ impl SandboxExecRequest {
             if !root.root.is_absolute() {
                 return invalid_absolute_path("writable_roots.root", &root.root);
             }
+            let normalized_root = normalize_lexical_absolute_path(&root.root);
             for path in &root.read_only_subpaths {
                 if !path.is_absolute() {
                     return invalid_absolute_path("writable_roots.read_only_subpaths", path);
                 }
-                if !path.starts_with(&root.root) {
+                let normalized_subpath = normalize_lexical_absolute_path(path);
+                if !normalized_subpath.starts_with(&normalized_root) {
                     return Err(SandboxError::InvalidRequest(format!(
                         "read-only subpath {} must stay under writable root {}",
                         path.display(),
@@ -251,6 +258,24 @@ fn invalid_absolute_path(field: &str, path: &Path) -> SandboxResult<()> {
         "{field} must contain absolute paths: {}",
         path.display()
     )))
+}
+
+fn normalize_lexical_absolute_path(path: &Path) -> PathBuf {
+    debug_assert!(path.is_absolute());
+
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(Path::new("/")),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let _ = normalized.pop();
+            }
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+    normalized
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -350,7 +375,6 @@ mod tests {
             command: vec!["/bin/true".to_string()],
             cwd: PathBuf::from("/tmp"),
             env: BTreeMap::new(),
-            runtime_class: RuntimeClass::Default,
             filesystem: FilesystemPolicy::default(),
             network: NetworkPolicy::Disabled,
             pty: PtyPolicy::Disabled,
@@ -369,7 +393,6 @@ mod tests {
             command: vec!["/bin/true".to_string()],
             cwd: PathBuf::from("."),
             env: BTreeMap::new(),
-            runtime_class: RuntimeClass::Default,
             filesystem: FilesystemPolicy::default(),
             network: NetworkPolicy::Disabled,
             pty: PtyPolicy::Disabled,
@@ -389,7 +412,6 @@ mod tests {
             command: vec!["/bin/true".to_string()],
             cwd: PathBuf::from("/tmp"),
             env: BTreeMap::new(),
-            runtime_class: RuntimeClass::Default,
             filesystem: FilesystemPolicy {
                 mode: FilesystemMode::Restricted,
                 include_platform_defaults: true,
@@ -419,7 +441,6 @@ mod tests {
             command: vec!["/bin/true".to_string()],
             cwd: PathBuf::from("/tmp"),
             env: BTreeMap::new(),
-            runtime_class: RuntimeClass::Default,
             filesystem: FilesystemPolicy::default(),
             network: NetworkPolicy::Disabled,
             pty: PtyPolicy::Disabled,
@@ -434,5 +455,34 @@ mod tests {
         let decoded: HelperExecuteRequest =
             serde_json::from_str(&encoded).expect("deserialize helper request");
         assert_eq!(decoded.protocol_version, HELPER_PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn rejects_read_only_subpath_that_escapes_root_via_parent_segments() {
+        let request = SandboxExecRequest {
+            command: vec!["/bin/true".to_string()],
+            cwd: PathBuf::from("/tmp"),
+            env: BTreeMap::new(),
+            filesystem: FilesystemPolicy {
+                mode: FilesystemMode::Restricted,
+                include_platform_defaults: true,
+                mount_proc: true,
+                readable_roots: vec![],
+                writable_roots: vec![WritableRoot {
+                    root: PathBuf::from("/tmp/work"),
+                    read_only_subpaths: vec![PathBuf::from("/tmp/work/../escape")],
+                }],
+                unreadable_roots: vec![],
+            },
+            network: NetworkPolicy::Disabled,
+            pty: PtyPolicy::Disabled,
+            limits: ResourceLimits::default(),
+            governance_mode: ResourceGovernanceMode::BestEffort,
+            syscall_policy: SyscallPolicy::Unconfined,
+            capture: OutputCapturePolicy::default(),
+            trace: TraceContext::default(),
+        };
+        let err = request.validate().expect_err("request should be invalid");
+        assert!(err.to_string().contains("must stay under writable root"));
     }
 }

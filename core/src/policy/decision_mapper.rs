@@ -1,12 +1,12 @@
 use af_policy::{PolicyApproval, PolicyDecision, PolicyRuleKind};
 use af_policy_infra::CompiledRule;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionContract {
     pub decision: PolicyDecision,
     pub reason: Option<String>,
-    pub execution_profile: Option<String>,
+    pub runtime_backend: Option<String>,
     pub requirements: Vec<String>,
     pub approval: Option<PolicyApproval>,
     pub policy_revision: u64,
@@ -70,7 +70,7 @@ impl DecisionMapper {
         ExecutionContract {
             decision: compiled_rule.rule.effect.decision,
             reason: compiled_rule.rule.effect.reason.clone(),
-            execution_profile: compiled_rule.rule.effect.execution_profile.clone(),
+            runtime_backend: compiled_rule.rule.effect.runtime_backend.clone(),
             requirements: compiled_rule.rule.effect.requirements.clone(),
             approval: compiled_rule.rule.effect.approval.clone(),
             policy_revision: revision,
@@ -90,7 +90,7 @@ impl DecisionMapper {
         ExecutionContract {
             decision: PolicyDecision::Allow,
             reason: Some("no policy rule matched".to_string()),
-            execution_profile: None,
+            runtime_backend: None,
             requirements: Vec::new(),
             approval: None,
             policy_revision: revision,
@@ -109,7 +109,7 @@ impl DecisionMapper {
         ExecutionContract {
             decision: PolicyDecision::Forbid,
             reason: Some(reason.into()),
-            execution_profile: None,
+            runtime_backend: None,
             requirements: Vec::new(),
             approval: None,
             policy_revision: revision,

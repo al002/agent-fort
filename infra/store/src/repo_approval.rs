@@ -75,7 +75,7 @@ fn create_approval(connection: &mut Connection, command: NewApproval) -> StoreRe
         .execute(
             "INSERT INTO approvals (
                approval_id, session_id, task_id, trace_id, capability, operation, status, policy_reason,
-               risk_class, command_class, input_brief_json, requested_runtime_class, resolved_runtime_class,
+               risk_class, command_class, input_brief_json, requested_runtime_backend, resolved_runtime_backend,
                requires_network, requires_pty, created_at_ms, expires_at_ms, responded_at_ms,
                response_reason, response_idempotency_key
              ) VALUES (
@@ -93,8 +93,8 @@ fn create_approval(connection: &mut Connection, command: NewApproval) -> StoreRe
                 command.risk_class,
                 command.command_class,
                 command.input_brief_json,
-                command.requested_runtime_class,
-                command.resolved_runtime_class,
+                command.requested_runtime_backend,
+                command.resolved_runtime_backend,
                 bool_to_i64(command.requires_network),
                 bool_to_i64(command.requires_pty),
                 to_i64(command.created_at_ms, "created_at_ms")?,
@@ -344,8 +344,8 @@ fn fetch_approval_raw(
         .query_row(
             "SELECT
                approval_id, session_id, task_id, trace_id, capability, operation, status,
-               policy_reason, risk_class, command_class, input_brief_json, requested_runtime_class,
-               resolved_runtime_class, requires_network, requires_pty, created_at_ms, expires_at_ms,
+               policy_reason, risk_class, command_class, input_brief_json, requested_runtime_backend,
+               resolved_runtime_backend, requires_network, requires_pty, created_at_ms, expires_at_ms,
                responded_at_ms, response_reason, response_idempotency_key
              FROM approvals
              WHERE session_id = ?1 AND approval_id = ?2",
@@ -369,8 +369,8 @@ struct RawApproval {
     risk_class: String,
     command_class: String,
     input_brief_json: String,
-    requested_runtime_class: String,
-    resolved_runtime_class: String,
+    requested_runtime_backend: String,
+    resolved_runtime_backend: String,
     requires_network: i64,
     requires_pty: i64,
     created_at_ms: i64,
@@ -394,8 +394,8 @@ impl RawApproval {
             risk_class: self.risk_class,
             command_class: self.command_class,
             input_brief_json: self.input_brief_json,
-            requested_runtime_class: self.requested_runtime_class,
-            resolved_runtime_class: self.resolved_runtime_class,
+            requested_runtime_backend: self.requested_runtime_backend,
+            resolved_runtime_backend: self.resolved_runtime_backend,
             requires_network: self.requires_network != 0,
             requires_pty: self.requires_pty != 0,
             created_at_ms: to_u64(self.created_at_ms, "created_at_ms")?,
@@ -423,8 +423,8 @@ fn row_to_raw_approval(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawApproval>
         risk_class: row.get(8)?,
         command_class: row.get(9)?,
         input_brief_json: row.get(10)?,
-        requested_runtime_class: row.get(11)?,
-        resolved_runtime_class: row.get(12)?,
+        requested_runtime_backend: row.get(11)?,
+        resolved_runtime_backend: row.get(12)?,
         requires_network: row.get(13)?,
         requires_pty: row.get(14)?,
         created_at_ms: row.get(15)?,

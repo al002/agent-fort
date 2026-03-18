@@ -1,5 +1,5 @@
-mod debounce;
 mod cel_compiler;
+mod debounce;
 mod directory_loader;
 mod runtime;
 mod source;
@@ -53,7 +53,9 @@ pub enum PolicyInfraError {
     CelExecution { rule_id: String, message: String },
     #[error("policy evaluation context must serialize to a CEL map at the top level")]
     InvalidEvaluationContext,
-    #[error("policy CEL expression for rule `{rule_id}` did not evaluate to bool: got {actual_type}")]
+    #[error(
+        "policy CEL expression for rule `{rule_id}` did not evaluate to bool: got {actual_type}"
+    )]
     NonBooleanResult {
         rule_id: String,
         actual_type: String,

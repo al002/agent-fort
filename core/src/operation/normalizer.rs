@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde_json::Value;
 use thiserror::Error;
@@ -61,7 +61,8 @@ impl OperationNormalizer {
         }
 
         add_path_targets(&mut targets, &affected_paths);
-        facts.touches_policy_dir = Fact::Known(touches_policy_dir(&affected_paths, &runtime.policy_dir));
+        facts.touches_policy_dir =
+            Fact::Known(touches_policy_dir(&affected_paths, &runtime.policy_dir));
         facts.affected_paths = std::mem::take(&mut affected_paths);
 
         Ok(NormalizedOperation {
@@ -165,10 +166,7 @@ fn bool_fact(
         if let Some(value) = find_bool(options, key) {
             return Fact::Known(value);
         }
-        if let Some(value) = labels
-            .get(*key)
-            .and_then(|value| parse_bool_like(value))
-        {
+        if let Some(value) = labels.get(*key).and_then(|value| parse_bool_like(value)) {
             return Fact::Known(value);
         }
     }
@@ -190,7 +188,11 @@ fn host_fact(payload: &Value, options: &Value, labels: &BTreeMap<String, String>
     Fact::Unknown
 }
 
-fn collect_tags(payload_labels: &BTreeMap<String, String>, payload: &Value, options: &Value) -> BTreeSet<String> {
+fn collect_tags(
+    payload_labels: &BTreeMap<String, String>,
+    payload: &Value,
+    options: &Value,
+) -> BTreeSet<String> {
     let mut tags = BTreeSet::new();
     collect_tags_from_value(payload, &mut tags);
     collect_tags_from_value(options, &mut tags);
@@ -248,7 +250,9 @@ fn extract_targets(kind: OperationKind, payload: &Value, options: &Value) -> Vec
 
     match kind {
         OperationKind::Exec => {
-            if let Some(command) = first_command_token(payload).or_else(|| first_command_token(options)) {
+            if let Some(command) =
+                first_command_token(payload).or_else(|| first_command_token(options))
+            {
                 push_target(TargetKind::Path, command, &mut dedupe, &mut result);
             }
         }
@@ -327,18 +331,38 @@ fn add_path_targets(targets: &mut Vec<Target>, affected_paths: &[PathBuf]) {
 }
 
 fn touches_policy_dir(paths: &[PathBuf], policy_dir: &Path) -> bool {
-    paths.iter().any(|path| path.starts_with(policy_dir))
+    let normalized_policy_dir = normalize_lexical_path(policy_dir);
+    paths.iter().any(|path| {
+        let normalized_path = normalize_lexical_path(path);
+        normalized_path.starts_with(&normalized_policy_dir)
+    })
 }
 
 fn resolve_path(raw: &str, workspace_root: Option<&Path>) -> PathBuf {
     let candidate = PathBuf::from(raw);
     if candidate.is_absolute() {
-        return candidate;
+        return normalize_lexical_path(&candidate);
     }
     if let Some(root) = workspace_root {
-        return root.join(candidate);
+        return normalize_lexical_path(&root.join(candidate));
     }
-    PathBuf::from(raw)
+    normalize_lexical_path(Path::new(raw))
+}
+
+fn normalize_lexical_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(Path::new("/")),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let _ = normalized.pop();
+            }
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+    normalized
 }
 
 fn extract_string_paths(payload: &Value, options: &Value) -> Vec<String> {
@@ -531,6 +555,25 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_parent_segments_before_policy_touch_check() {
+        let raw = RawOperation {
+            kind: "file.write".to_string(),
+            payload: json!({ "path": "policies/../policies/base.yaml" }),
+            options: json!({}),
+            labels: BTreeMap::new(),
+        };
+        let normalized = OperationNormalizer
+            .normalize(raw, runtime())
+            .expect("normalize file write");
+
+        assert_eq!(normalized.facts.touches_policy_dir, Fact::Known(true));
+        assert_eq!(
+            normalized.facts.affected_paths,
+            vec![PathBuf::from("/work/policies/base.yaml")]
+        );
+    }
+
+    #[test]
     fn normalizes_fetch_with_host_and_output_path() {
         let raw = RawOperation {
             kind: "fetch".to_string(),
@@ -548,10 +591,17 @@ mod tests {
         assert_eq!(normalized.intent.kind, OperationKind::Fetch);
         assert_eq!(normalized.facts.requires_network, Fact::Known(true));
         assert_eq!(normalized.facts.requires_write, Fact::Known(true));
-        assert_eq!(normalized.facts.primary_host, Fact::Known("example.com".to_string()));
-        assert!(normalized.intent.targets.iter().any(|target| {
-            target.kind == TargetKind::Host && target.value == "example.com"
-        }));
+        assert_eq!(
+            normalized.facts.primary_host,
+            Fact::Known("example.com".to_string())
+        );
+        assert!(
+            normalized
+                .intent
+                .targets
+                .iter()
+                .any(|target| { target.kind == TargetKind::Host && target.value == "example.com" })
+        );
     }
 
     #[test]
@@ -569,9 +619,13 @@ mod tests {
             .expect("normalize tool call");
 
         assert_eq!(normalized.intent.kind, OperationKind::ToolCall);
-        assert!(normalized.intent.targets.iter().any(|target| {
-            target.kind == TargetKind::Tool && target.value == "web.search"
-        }));
+        assert!(
+            normalized
+                .intent
+                .targets
+                .iter()
+                .any(|target| { target.kind == TargetKind::Tool && target.value == "web.search" })
+        );
         assert!(normalized.intent.tags.contains("network"));
         assert!(normalized.intent.tags.contains("sensitive"));
         assert!(normalized.intent.tags.contains("approval"));

@@ -1,9 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 
-use af_policy::{
-    LoadedPolicies, LoadedRule, PolicyDirectorySnapshot, PolicyDocument, RuleSource,
-};
+use af_policy::{LoadedPolicies, LoadedRule, PolicyDirectorySnapshot, PolicyDocument, RuleSource};
 
 use crate::{PolicyInfraError, PolicyInfraResult};
 
@@ -118,9 +116,7 @@ rules:
         let snapshot = PolicyDirectoryLoader::new(&root)
             .load()
             .expect("load directory snapshot");
-        let loaded = YamlParser
-            .parse(snapshot)
-            .expect("parse policy documents");
+        let loaded = YamlParser.parse(snapshot).expect("parse policy documents");
 
         let ids = loaded
             .rules

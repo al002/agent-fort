@@ -15,7 +15,8 @@ impl RuleMatchFilter {
         rules: &'a [LoadedRule],
         operation: &NormalizedOperation,
     ) -> Vec<&'a LoadedRule> {
-        rules.iter()
+        rules
+            .iter()
             .filter(|loaded| self.matches_rule(&loaded.rule, operation))
             .collect()
     }
@@ -40,7 +41,10 @@ fn matches_selector(selector: &PolicyMatch, operation: &NormalizedOperation) -> 
     ) {
         return false;
     }
-    if !matches_bool(selector.requires_write, operation.facts.requires_write.as_ref()) {
+    if !matches_bool(
+        selector.requires_write,
+        operation.facts.requires_write.as_ref(),
+    ) {
         return false;
     }
 
@@ -115,7 +119,7 @@ mod tests {
             effect: PolicyEffect {
                 decision: PolicyDecision::Ask,
                 reason: None,
-                execution_profile: None,
+                runtime_backend: None,
                 requirements: Vec::new(),
                 approval: None,
             },

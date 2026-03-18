@@ -2,9 +2,9 @@ use af_task::{
     AdvanceTaskStepCommand, NewTask, Task, TaskCreatedBy, TaskRepository, TaskRepositoryError,
     TaskStatus, UpdateTaskStatusCommand,
 };
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::{is_dup_key, sql_err, storage_msg, to_i64, to_u64, Store, StoreError, StoreResult};
+use crate::{Store, StoreError, StoreResult, is_dup_key, sql_err, storage_msg, to_i64, to_u64};
 
 impl TaskRepository for Store {
     fn create_task(&self, command: NewTask) -> Result<Task, TaskRepositoryError> {

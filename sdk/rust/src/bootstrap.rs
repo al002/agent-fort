@@ -3,6 +3,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
+use std::thread;
 use std::time::Duration;
 
 use af_rpc_transport::Endpoint;
@@ -288,6 +289,16 @@ fn run_bootstrap(
         .stderr
         .take()
         .ok_or(SdkError::Unsupported("failed to capture bootstrap stderr"))?;
+    let stdout_reader = thread::spawn(move || -> std::io::Result<Vec<u8>> {
+        let mut buffer = Vec::new();
+        stdout.read_to_end(&mut buffer)?;
+        Ok(buffer)
+    });
+    let stderr_reader = thread::spawn(move || -> std::io::Result<Vec<u8>> {
+        let mut buffer = Vec::new();
+        stderr.read_to_end(&mut buffer)?;
+        Ok(buffer)
+    });
 
     let status = child.wait_timeout(Duration::from_millis(timeout_ms.max(1)))?;
     let timed_out = status.is_none();
@@ -296,10 +307,12 @@ fn run_bootstrap(
         let _ = child.wait();
     }
 
-    let mut stdout_buf = Vec::new();
-    let mut stderr_buf = Vec::new();
-    stdout.read_to_end(&mut stdout_buf)?;
-    stderr.read_to_end(&mut stderr_buf)?;
+    let stdout_buf = stdout_reader
+        .join()
+        .map_err(|_| SdkError::Unsupported("bootstrap stdout reader thread panicked"))??;
+    let stderr_buf = stderr_reader
+        .join()
+        .map_err(|_| SdkError::Unsupported("bootstrap stderr reader thread panicked"))??;
 
     if timed_out {
         return Err(SdkError::BootstrapCommandTimeout {

@@ -1,11 +1,11 @@
 use af_audit::{AuditEventType, NewAuditEvent};
 use af_core::{CancelTaskWrite, CreateTaskWrite, TaskAppError, TaskPort};
 use af_task::{Task, TaskStatus};
-use rusqlite::{params, Connection, Transaction};
+use rusqlite::{Connection, Transaction, params};
 
 use crate::repo_task::{load_task, task_created_by_to_db, task_status_to_db};
 use crate::sql_audit::audit_event_type_to_db;
-use crate::{sql_err, storage_msg, to_i64, Store, StoreError};
+use crate::{Store, StoreError, sql_err, storage_msg, to_i64};
 
 impl TaskPort for Store {
     fn create_with_audit(&self, write: CreateTaskWrite) -> Result<Task, TaskAppError> {

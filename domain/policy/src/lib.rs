@@ -94,7 +94,7 @@ pub struct PolicyMatch {
 pub struct PolicyEffect {
     pub decision: PolicyDecision,
     pub reason: Option<String>,
-    pub execution_profile: Option<String>,
+    pub runtime_backend: Option<String>,
     #[serde(default)]
     pub requirements: Vec<String>,
     pub approval: Option<PolicyApproval>,

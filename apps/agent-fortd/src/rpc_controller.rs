@@ -8,16 +8,16 @@ use af_core::{
 use af_rpc_proto::codec::{decode_message, encode_message};
 use af_rpc_proto::{
     CancelTaskRequest, CancelTaskResponse, CreateSessionRequest, CreateSessionResponse,
-    CreateTaskRequest, CreateTaskResponse, DaemonInfo, GetDaemonInfoRequest,
-    GetDaemonInfoResponse, GetTaskRequest, GetTaskResponse, PingRequest, PingResponse, RpcError,
-    RpcErrorCode, RpcMethod, RpcRequest, RpcResponse, Session, SessionLease, SessionStatus, Task,
-    TaskCreatedBy, TaskStatus, rpc_response,
+    CreateTaskRequest, CreateTaskResponse, DaemonInfo, GetDaemonInfoRequest, GetDaemonInfoResponse,
+    GetTaskRequest, GetTaskResponse, PingRequest, PingResponse, RpcError, RpcErrorCode, RpcMethod,
+    RpcRequest, RpcResponse, Session, SessionLease, SessionStatus, Task, TaskCreatedBy, TaskStatus,
+    rpc_response,
 };
 use af_rpc_transport::RpcConnection;
 use af_session::{SessionRepository, SessionRepositoryError, SessionStatus as DomainSessionStatus};
 use af_store::Store;
 use af_task::TaskCreatedBy as DomainTaskCreatedBy;
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 #[derive(Debug, Clone)]
 pub struct RpcController {
@@ -65,8 +65,13 @@ impl RpcController {
 
     pub async fn handle_connection(&self, mut connection: RpcConnection) -> Result<()> {
         let request: RpcRequest = connection.read_message().await?;
-        self.state.store.ping()?;
-        let response = self.dispatch(request);
+        let controller = self.clone();
+        let response = tokio::task::spawn_blocking(move || -> Result<RpcResponse> {
+            controller.state.store.ping()?;
+            Ok(controller.dispatch(request))
+        })
+        .await
+        .context("join rpc dispatch task")??;
         connection.write_message(&response).await?;
         Ok(())
     }
@@ -392,8 +397,8 @@ mod tests {
     use super::*;
     use af_audit::{AuditCursor, AuditEventType, AuditRepository};
     use af_session::{NewSession, SessionLease, SessionRepository};
-    use af_task::TaskRepository;
     use af_store::StoreOptions;
+    use af_task::TaskRepository;
 
     #[test]
     fn create_session_dispatch_returns_session_and_audit() {

@@ -89,8 +89,7 @@ mod tests {
 
     use af_sandbox::{
         FilesystemMode, FilesystemPolicy, NetworkPolicy, OutputCapturePolicy, PtyPolicy,
-        ResourceGovernanceMode, ResourceLimits, RuntimeClass, SandboxExecRequest, SyscallPolicy,
-        TraceContext,
+        ResourceGovernanceMode, ResourceLimits, SandboxExecRequest, SyscallPolicy, TraceContext,
     };
 
     use super::HelperClient;
@@ -114,7 +113,6 @@ mod tests {
             ],
             cwd: PathBuf::from("/tmp"),
             env: BTreeMap::new(),
-            runtime_class: RuntimeClass::FullAccess,
             filesystem: FilesystemPolicy {
                 mode: FilesystemMode::FullAccess,
                 include_platform_defaults: false,

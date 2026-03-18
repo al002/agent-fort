@@ -58,13 +58,13 @@ impl CompiledRule {
     {
         let value = cel::to_value(activation)?;
         let context = context_from_root_value(value)?;
-        let result = self
-            .program
-            .execute(&context)
-            .map_err(|error| PolicyInfraError::CelExecution {
-                rule_id: self.rule.id.clone(),
-                message: error.to_string(),
-            })?;
+        let result =
+            self.program
+                .execute(&context)
+                .map_err(|error| PolicyInfraError::CelExecution {
+                    rule_id: self.rule.id.clone(),
+                    message: error.to_string(),
+                })?;
         match result {
             Value::Bool(value) => Ok(value),
             other => Err(PolicyInfraError::NonBooleanResult {
@@ -79,7 +79,11 @@ impl CompiledRule {
 pub struct CelCompiler;
 
 impl CelCompiler {
-    pub fn compile(&self, loaded: LoadedPolicies, revision: u64) -> PolicyInfraResult<CompiledPolicies> {
+    pub fn compile(
+        &self,
+        loaded: LoadedPolicies,
+        revision: u64,
+    ) -> PolicyInfraResult<CompiledPolicies> {
         let rules = loaded
             .rules
             .iter()
@@ -174,17 +178,12 @@ rules:
         let snapshot = PolicyDirectoryLoader::new(&root)
             .load()
             .expect("load directory");
-        let loaded = YamlParser
-            .parse(snapshot)
-            .expect("parse policy file");
+        let loaded = YamlParser.parse(snapshot).expect("parse policy file");
         let compiled = CelCompiler
             .compile(loaded, 1)
             .expect("compile policy rules");
 
-        let activation = HashMap::from([(
-            "facts",
-            HashMap::from([("requires_network", true)]),
-        )]);
+        let activation = HashMap::from([("facts", HashMap::from([("requires_network", true)]))]);
         assert!(
             compiled.rules[0]
                 .evaluate(&activation)

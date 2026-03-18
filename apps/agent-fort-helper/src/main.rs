@@ -4,9 +4,10 @@ use std::path::PathBuf;
 
 use af_linux_sandbox::{LinuxSandboxConfig, LinuxSandboxRuntime};
 use af_sandbox::{
-    HELPER_PROTOCOL_VERSION, HelperExecuteRequest, HelperExecuteResponse, SandboxRuntime,
+    HELPER_MAX_REQUEST_BYTES, HELPER_PROTOCOL_VERSION, HelperExecuteRequest, HelperExecuteResponse,
+    SandboxRuntime,
 };
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 const ENV_BWRAP_PATH: &str = "AF_BWRAP_PATH";
 const ENV_CGROUP_ROOT: &str = "AF_CGROUP_ROOT";
@@ -20,12 +21,23 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    let mut payload = String::new();
+    let mut payload = Vec::new();
+    let max_plus_one = u64::try_from(HELPER_MAX_REQUEST_BYTES)
+        .expect("helper max request bytes fits into u64")
+        + 1;
     std::io::stdin()
-        .read_to_string(&mut payload)
+        .take(max_plus_one)
+        .read_to_end(&mut payload)
         .context("read helper request from stdin")?;
+    if payload.len() > HELPER_MAX_REQUEST_BYTES {
+        bail!(
+            "helper request too large: {} bytes > {} bytes",
+            payload.len(),
+            HELPER_MAX_REQUEST_BYTES
+        );
+    }
     let request: HelperExecuteRequest =
-        serde_json::from_str(&payload).context("parse helper request JSON")?;
+        serde_json::from_slice(&payload).context("parse helper request JSON")?;
 
     if request.protocol_version != HELPER_PROTOCOL_VERSION {
         let response = HelperExecuteResponse::failure(format!(

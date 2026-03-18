@@ -104,10 +104,16 @@ mod tests {
         let context = CelContextBuilder.build(&operation);
         let object = context.as_object().expect("context must be object");
 
-        assert_eq!(object["request"]["kind"], Value::String("fetch".to_string()));
+        assert_eq!(
+            object["request"]["kind"],
+            Value::String("fetch".to_string())
+        );
         assert_eq!(object["facts"]["requires_network"], Value::Bool(true));
         assert_eq!(object["facts"]["requires_write"], Value::Null);
-        assert_eq!(object["runtime"]["platform"], Value::String("linux".to_string()));
+        assert_eq!(
+            object["runtime"]["platform"],
+            Value::String("linux".to_string())
+        );
     }
 
     #[test]

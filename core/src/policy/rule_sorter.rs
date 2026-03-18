@@ -30,7 +30,7 @@ fn compare_rule_keys(
     left_source: &RuleSource,
     right_rule: &PolicyRule,
     right_source: &RuleSource,
-    ) -> Ordering {
+) -> Ordering {
     right_rule
         .priority
         .cmp(&left_rule.priority)
@@ -65,7 +65,10 @@ mod tests {
         ];
 
         RuleSorter.sort_loaded_rules(&mut rules);
-        let ordered_ids = rules.iter().map(|rule| rule.rule.id.as_str()).collect::<Vec<_>>();
+        let ordered_ids = rules
+            .iter()
+            .map(|rule| rule.rule.id.as_str())
+            .collect::<Vec<_>>();
         assert_eq!(
             ordered_ids,
             vec!["guardrail", "deny-low", "approval-low", "allow-low"]
@@ -80,7 +83,10 @@ mod tests {
             loaded("r0", PolicyRuleKind::Allow, 10, "a.yaml", 0),
         ];
         RuleSorter.sort_loaded_rules(&mut rules);
-        let ordered_ids = rules.iter().map(|rule| rule.rule.id.as_str()).collect::<Vec<_>>();
+        let ordered_ids = rules
+            .iter()
+            .map(|rule| rule.rule.id.as_str())
+            .collect::<Vec<_>>();
         assert_eq!(ordered_ids, vec!["r0", "r1", "r2"]);
     }
 
@@ -106,7 +112,7 @@ mod tests {
                 effect: PolicyEffect {
                     decision: PolicyDecision::Allow,
                     reason: None,
-                    execution_profile: None,
+                    runtime_backend: None,
                     requirements: Vec::new(),
                     approval: None,
                 },

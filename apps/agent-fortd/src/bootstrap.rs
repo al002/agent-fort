@@ -30,7 +30,8 @@ impl BootstrappedDaemon {
             "sqlite store ready"
         );
 
-        let policy_runtime = PolicyRuntime::start(PolicyRuntimeConfig::new(config.policy_dir.clone()))?;
+        let policy_runtime =
+            PolicyRuntime::start(PolicyRuntimeConfig::new(config.policy_dir.clone()))?;
         let policy_status = policy_runtime.status()?;
         info!(
             policy_dir = %config.policy_dir.display(),

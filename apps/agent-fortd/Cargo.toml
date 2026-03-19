@@ -9,6 +9,7 @@ af-rpc-transport = { path = "../../protocol/rpc-transport" }
 af-core = { path = "../../core" }
 af-audit = { path = "../../domain/audit" }
 af-approval = { path = "../../domain/approval" }
+af-policy = { path = "../../domain/policy" }
 af-sandbox = { path = "../../infra/sandbox" }
 af-policy-infra = { path = "../../infra/policy" }
 af-session = { path = "../../domain/session" }
@@ -16,6 +17,7 @@ af-task = { path = "../../domain/task" }
 af-store = { path = "../../infra/store" }
 anyhow = { workspace = true }
 serde_json = { workspace = true }
+prost-types = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

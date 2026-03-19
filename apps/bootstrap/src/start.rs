@@ -58,6 +58,7 @@ pub fn run(args: StartArgs) -> Result<StartOutput> {
         &state.bwrap_path,
         &state.helper_path,
         args.policy_dir.as_deref(),
+        args.store_path.as_deref(),
     )?;
     let deadline = Instant::now() + Duration::from_millis(args.startup_timeout_ms);
     let poll_interval = Duration::from_millis(args.ping_interval_ms.max(10));
@@ -183,6 +184,7 @@ fn spawn_daemon(
     bwrap_path: &Path,
     helper_path: &Path,
     policy_dir: Option<&Path>,
+    store_path: Option<&Path>,
 ) -> Result<u32> {
     let mut command = Command::new(daemon_path);
     command
@@ -194,6 +196,9 @@ fn spawn_daemon(
         .stderr(Stdio::null());
     if let Some(policy_dir) = policy_dir {
         command.env("AF_POLICY_DIR", policy_dir);
+    }
+    if let Some(store_path) = store_path {
+        command.env("AF_STORE_PATH", store_path);
     }
 
     let child = command

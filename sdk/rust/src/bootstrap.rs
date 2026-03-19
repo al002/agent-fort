@@ -35,6 +35,7 @@ pub struct BootstrapConfig {
     pub bundle_manifest: Option<String>,
     pub endpoint: Option<String>,
     pub policy_dir: Option<PathBuf>,
+    pub store_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -95,6 +96,7 @@ struct ResolvedBootstrapConfig {
     bundle_manifest: Option<String>,
     endpoint: String,
     policy_dir: PathBuf,
+    store_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -172,6 +174,7 @@ impl BootstrapRunner {
             bundle_manifest: self.config.bundle_manifest.clone(),
             endpoint,
             policy_dir,
+            store_path: self.config.store_path.clone(),
         })
     }
 }
@@ -264,6 +267,11 @@ fn build_start_args(config: &ResolvedBootstrapConfig) -> Vec<OsString> {
 
     args.push(OsString::from("--policy-dir"));
     args.push(config.policy_dir.as_os_str().to_owned());
+
+    if let Some(store_path) = &config.store_path {
+        args.push(OsString::from("--store-path"));
+        args.push(store_path.as_os_str().to_owned());
+    }
     args
 }
 

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use af_policy_infra::{PolicyRuntime, PolicyRuntimeConfig};
 use af_store::Store;
@@ -14,8 +15,6 @@ use crate::server::DaemonServer;
 pub struct BootstrappedDaemon {
     config: DaemonConfig,
     server: DaemonServer,
-    _helper_client: HelperClient,
-    _policy_runtime: PolicyRuntime,
 }
 
 impl BootstrappedDaemon {
@@ -30,9 +29,13 @@ impl BootstrappedDaemon {
             "sqlite store ready"
         );
 
-        let policy_runtime =
-            PolicyRuntime::start(PolicyRuntimeConfig::new(config.policy_dir.clone()))?;
-        let policy_status = policy_runtime.status()?;
+        let policy_runtime = Arc::new(Mutex::new(PolicyRuntime::start(PolicyRuntimeConfig::new(
+            config.policy_dir.clone(),
+        ))?));
+        let policy_status = policy_runtime
+            .lock()
+            .expect("policy runtime lock should not be poisoned")
+            .status()?;
         info!(
             policy_dir = %config.policy_dir.display(),
             policy_revision = policy_status.revision,
@@ -41,7 +44,20 @@ impl BootstrappedDaemon {
             "policy directory runtime ready"
         );
 
-        let controller = RpcController::new(config.daemon_instance_id.clone(), Arc::new(store));
+        let helper_client = HelperClient::new(
+            config.helper_path.clone(),
+            config.bwrap_path.clone(),
+            config.cgroup_root.clone(),
+        );
+        let workspace_root = std::env::current_dir().ok();
+        let controller = RpcController::new_with_execution(
+            config.daemon_instance_id.clone(),
+            Arc::new(store),
+            helper_client,
+            policy_runtime,
+            config.policy_dir.clone(),
+            workspace_root,
+        );
         let daemon_info = controller.daemon_info();
         info!(
             daemon_instance_id = %config.daemon_instance_id,
@@ -50,17 +66,7 @@ impl BootstrappedDaemon {
         );
 
         let server = DaemonServer::bind(config.endpoint.clone(), controller)?;
-        let helper_client = HelperClient::new(
-            config.helper_path.clone(),
-            config.bwrap_path.clone(),
-            config.cgroup_root.clone(),
-        );
-        Ok(Self {
-            config,
-            server,
-            _helper_client: helper_client,
-            _policy_runtime: policy_runtime,
-        })
+        Ok(Self { config, server })
     }
 
     pub async fn run(self) -> Result<()> {

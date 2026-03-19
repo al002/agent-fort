@@ -1,27 +1,50 @@
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use af_approval::{
+    ApprovalItem as DomainApprovalItem, ApprovalRepository, ApprovalStatus, NewApproval,
+};
+use af_audit::{AuditEventType, AuditRepository, NewAuditEvent};
 use af_core::{
     ApprovalAppError, ApprovalAppService, CancelTaskInput, CreateSessionInput, CreateTaskInput,
-    GetApprovalInput, RespondApprovalInput, SessionAppError, SessionAppService, SessionConfig,
-    TaskAppError, TaskAppService,
+    Fact, GetApprovalInput, OperationKind, OperationNormalizer, PolicyEvaluator, RawOperation,
+    RespondApprovalInput, RuntimeContext, RuntimePlatform, SessionAppError, SessionAppService,
+    SessionConfig, TargetKind, TaskAppError, TaskAppService,
 };
+use af_policy::PolicyDecision;
+use af_policy_infra::{CompiledPolicies, PolicyRuntime};
 use af_rpc_proto::codec::{decode_message, encode_message};
+use af_rpc_proto::task_outcome::Outcome as RpcTaskOutcome;
 use af_rpc_proto::{
     Approval as RpcApproval, ApprovalDecision as RpcApprovalDecision,
     ApprovalItem as RpcApprovalItem, ApprovalStatus as RpcApprovalStatus, CancelTaskRequest,
     CancelTaskResponse, CreateSessionRequest, CreateSessionResponse, CreateTaskRequest,
-    CreateTaskResponse, DaemonInfo, GetApprovalRequest, GetApprovalResponse, GetDaemonInfoRequest,
-    GetDaemonInfoResponse, GetTaskRequest, GetTaskResponse, PingRequest, PingResponse,
+    CreateTaskResponse, DaemonInfo, ExecutionEffect, ExecutionEffectKind, ExecutionResult,
+    GetApprovalRequest, GetApprovalResponse, GetDaemonInfoRequest, GetDaemonInfoResponse,
+    GetTaskRequest, GetTaskResponse, PendingApproval, PingRequest, PingResponse,
     RespondApprovalRequest, RespondApprovalResponse, RpcError, RpcErrorCode, RpcMethod, RpcRequest,
-    RpcResponse, Session, SessionLease, SessionStatus, Task, TaskCreatedBy, TaskStatus,
-    rpc_response,
+    RpcResponse, Session, SessionLease, SessionStatus, Task, TaskCreatedBy, TaskDenied,
+    TaskOperation, TaskOutcome, TaskStatus, rpc_response,
 };
 use af_rpc_transport::{RpcConnection, TransportError};
+use af_sandbox::{
+    FilesystemMode, FilesystemPolicy, NetworkPolicy, OutputCapturePolicy, PtyPolicy,
+    ResourceGovernanceMode, ResourceLimits, SandboxExecRequest, SandboxExecResult,
+    SandboxExitStatus, SyscallPolicy, TraceContext,
+};
 use af_session::{SessionRepository, SessionRepositoryError, SessionStatus as DomainSessionStatus};
 use af_store::Store;
-use af_task::TaskCreatedBy as DomainTaskCreatedBy;
+use af_task::{
+    AdvanceTaskStepCommand, TaskCreatedBy as DomainTaskCreatedBy, TaskRepository,
+    TaskStatus as DomainTaskStatus, UpdateTaskStatusCommand,
+};
 use anyhow::{Context, Result};
+use serde_json::{Value, json};
+use uuid::Uuid;
+
+use crate::helper_client::HelperClient;
 
 #[derive(Debug, Clone)]
 pub struct RpcController {
@@ -35,10 +58,47 @@ struct ControllerState {
     session_service: SessionAppService,
     task_service: TaskAppService,
     approval_service: ApprovalAppService,
+    execution_runtime: Option<ExecutionRuntime>,
+}
+
+#[derive(Debug, Clone)]
+struct ExecutionRuntime {
+    helper_client: HelperClient,
+    policy_runtime: Arc<Mutex<PolicyRuntime>>,
+    policy_dir: PathBuf,
+    workspace_root: Option<PathBuf>,
 }
 
 impl RpcController {
     pub fn new(daemon_instance_id: String, store: Arc<Store>) -> Self {
+        Self::new_internal(daemon_instance_id, store, None)
+    }
+
+    pub fn new_with_execution(
+        daemon_instance_id: String,
+        store: Arc<Store>,
+        helper_client: HelperClient,
+        policy_runtime: Arc<Mutex<PolicyRuntime>>,
+        policy_dir: PathBuf,
+        workspace_root: Option<PathBuf>,
+    ) -> Self {
+        Self::new_internal(
+            daemon_instance_id,
+            store,
+            Some(ExecutionRuntime {
+                helper_client,
+                policy_runtime,
+                policy_dir,
+                workspace_root,
+            }),
+        )
+    }
+
+    fn new_internal(
+        daemon_instance_id: String,
+        store: Arc<Store>,
+        execution_runtime: Option<ExecutionRuntime>,
+    ) -> Self {
         let session_service = SessionAppService::new(store.clone(), SessionConfig::default());
         let task_service = TaskAppService::new(store.clone());
         let approval_service = ApprovalAppService::new(store.clone());
@@ -49,6 +109,7 @@ impl RpcController {
                 session_service,
                 task_service,
                 approval_service,
+                execution_runtime,
             }),
         }
     }
@@ -208,25 +269,47 @@ impl RpcController {
             return response;
         }
 
-        if let Some(response) = self.ensure_session_access(
-            &request.session_id,
-            &request.client_instance_id,
-            &request.rebind_token,
-        ) {
+        let CreateTaskRequest {
+            session_id,
+            client_instance_id,
+            rebind_token,
+            goal,
+            limits_json,
+            operation,
+        } = request;
+        let operation = operation.expect("operation validated above");
+
+        if let Some(response) =
+            self.ensure_session_access(&session_id, &client_instance_id, &rebind_token)
+        {
             return response;
         }
 
         let created = self.state.task_service.create_task(CreateTaskInput {
-            session_id: request.session_id,
-            goal: request.goal,
-            limits_json: request.limits_json,
+            session_id,
+            goal,
+            limits_json,
             created_by: DomainTaskCreatedBy::Explicit,
         });
         match created {
-            Ok(task) => ok(encode_message(&CreateTaskResponse {
-                task: Some(to_proto_task(task)),
-                outcome: None,
-            })),
+            Ok(task) => {
+                let mut response_task = task;
+                let mut outcome = None;
+                if self.state.execution_runtime.is_some() {
+                    match self.execute_single_step_task(response_task.clone(), operation) {
+                        Ok((updated_task, task_outcome)) => {
+                            response_task = updated_task;
+                            outcome = Some(task_outcome);
+                        }
+                        Err(error_response) => return error_response,
+                    }
+                }
+
+                ok(encode_message(&CreateTaskResponse {
+                    task: Some(to_proto_task(response_task)),
+                    outcome,
+                }))
+            }
             Err(error) => map_task_error(error),
         }
     }
@@ -373,12 +456,80 @@ impl RpcController {
                 Err(error) => return map_task_error(error),
             }
         };
+        let mut task = task;
+        let mut outcome = None;
+
+        if responded.transition_applied {
+            match responded.approval.status {
+                af_approval::ApprovalStatus::Approved => {
+                    if self.state.execution_runtime.is_some()
+                        && task.status == af_task::TaskStatus::Pending
+                    {
+                        let operation = match task_operation_from_approval_snapshot(
+                            &responded.approval.execution_contract_json,
+                        ) {
+                            Ok(operation) => operation,
+                            Err(error_response) => return error_response,
+                        };
+                        match self.execute_single_step_task(task.clone(), operation) {
+                            Ok((updated_task, task_outcome)) => {
+                                task = updated_task;
+                                outcome = Some(task_outcome);
+                            }
+                            Err(error_response) => return error_response,
+                        }
+                    }
+                }
+                af_approval::ApprovalStatus::Denied => {
+                    outcome = Some(TaskOutcome {
+                        outcome: Some(RpcTaskOutcome::Denied(TaskDenied {
+                            code: Some("APPROVAL_DENIED".to_string()),
+                            message: task.error_message.clone(),
+                        })),
+                    });
+                }
+                _ => {}
+            }
+        }
 
         ok(encode_message(&RespondApprovalResponse {
             approval: Some(to_proto_approval(responded.approval)),
             task: Some(to_proto_task(task)),
-            invoke_result: None,
+            outcome,
         }))
+    }
+
+    fn execute_single_step_task(
+        &self,
+        task: af_task::Task,
+        operation: TaskOperation,
+    ) -> Result<(af_task::Task, TaskOutcome), RpcResponse> {
+        let runtime = self.state.execution_runtime.as_ref().ok_or_else(|| {
+            err(
+                RpcErrorCode::InternalError,
+                "execution runtime not configured",
+            )
+        })?;
+
+        let normalized =
+            normalize_task_operation(&operation, runtime, &self.state.daemon_instance_id)?;
+        let compiled = load_compiled_policies(runtime)?;
+        let contract = PolicyEvaluator::default().evaluate(compiled.as_ref(), &normalized);
+
+        match contract.decision {
+            PolicyDecision::Allow => execute_allow_path(
+                &self.state.store,
+                runtime,
+                task,
+                &normalized,
+                &operation,
+                &contract,
+            ),
+            PolicyDecision::Ask => execute_ask_path(&self.state.store, task, &operation, &contract),
+            PolicyDecision::Deny | PolicyDecision::Forbid => {
+                execute_deny_path(&self.state.store, task, &contract)
+            }
+        }
     }
 
     fn ensure_session_access(
@@ -459,6 +610,967 @@ fn validate_task_operation(operation: Option<&af_rpc_proto::TaskOperation>) -> O
         ));
     }
     None
+}
+
+fn normalize_task_operation(
+    operation: &TaskOperation,
+    runtime: &ExecutionRuntime,
+    daemon_instance_id: &str,
+) -> Result<af_core::NormalizedOperation, RpcResponse> {
+    let labels = operation
+        .labels
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let raw = RawOperation {
+        kind: operation.kind.clone(),
+        payload: struct_to_json(operation.payload.as_ref()),
+        options: struct_to_json(operation.options.as_ref()),
+        labels,
+    };
+    let runtime_context = RuntimeContext {
+        platform: RuntimePlatform::Linux,
+        daemon_instance_id: daemon_instance_id.to_string(),
+        policy_dir: runtime.policy_dir.clone(),
+        workspace_root: runtime.workspace_root.clone(),
+    };
+    OperationNormalizer
+        .normalize(raw, runtime_context)
+        .map_err(|error| {
+            err(
+                RpcErrorCode::BadRequest,
+                format!("normalize operation failed: {error}"),
+            )
+        })
+}
+
+fn load_compiled_policies(
+    runtime: &ExecutionRuntime,
+) -> Result<Arc<CompiledPolicies>, RpcResponse> {
+    let policy_runtime = runtime.policy_runtime.lock().map_err(|_| {
+        err(
+            RpcErrorCode::PolicyLoadFailed,
+            "policy runtime lock poisoned",
+        )
+    })?;
+    policy_runtime.compiled().map_err(|error| {
+        err(
+            RpcErrorCode::PolicyLoadFailed,
+            format!("load policy failed: {error}"),
+        )
+    })
+}
+
+fn execute_allow_path(
+    store: &Store,
+    runtime: &ExecutionRuntime,
+    task: af_task::Task,
+    normalized: &af_core::NormalizedOperation,
+    operation: &TaskOperation,
+    contract: &af_core::ExecutionContract,
+) -> Result<(af_task::Task, TaskOutcome), RpcResponse> {
+    let running = transition_task_status(
+        store,
+        &task,
+        Some(DomainTaskStatus::Pending),
+        DomainTaskStatus::Running,
+        None,
+        None,
+    )?;
+    append_task_audit(
+        store,
+        AuditEventType::TaskStarted,
+        &running,
+        contract.policy_audit_payload_json().ok(),
+        None,
+    )?;
+
+    let request = build_sandbox_request(runtime, &running, normalized, operation)?;
+    let effects = build_execution_effects(normalized, &request.command);
+    let mut execution = match runtime.helper_client.execute(request) {
+        Ok(result) => execution_result_from_sandbox(result),
+        Err(error) => failure_execution_result(error.to_string()),
+    };
+    execution.effects = effects;
+    let finished_status = if execution.state == "completed" {
+        DomainTaskStatus::Completed
+    } else {
+        DomainTaskStatus::Failed
+    };
+    let error_code = if finished_status == DomainTaskStatus::Failed {
+        Some(if execution.timed_out {
+            "EXEC_TIMEOUT".to_string()
+        } else {
+            "EXEC_FAILED".to_string()
+        })
+    } else {
+        None
+    };
+    let error_message = if finished_status == DomainTaskStatus::Failed {
+        Some(if execution.stderr.trim().is_empty() {
+            "task execution failed".to_string()
+        } else {
+            execution.stderr.clone()
+        })
+    } else {
+        None
+    };
+
+    let finished = transition_task_status(
+        store,
+        &running,
+        Some(DomainTaskStatus::Running),
+        finished_status,
+        error_code.clone(),
+        error_message,
+    )?;
+    let stepped = finalize_task_step(store, &finished)?;
+    let event_type = if finished_status == DomainTaskStatus::Completed {
+        AuditEventType::TaskCompleted
+    } else {
+        AuditEventType::TaskFailed
+    };
+    append_task_audit(
+        store,
+        event_type,
+        &stepped,
+        Some(execution_payload_json(&execution)),
+        error_code,
+    )?;
+
+    Ok((
+        stepped,
+        TaskOutcome {
+            outcome: Some(RpcTaskOutcome::Execution(execution)),
+        },
+    ))
+}
+
+fn execute_ask_path(
+    store: &Store,
+    task: af_task::Task,
+    operation: &TaskOperation,
+    contract: &af_core::ExecutionContract,
+) -> Result<(af_task::Task, TaskOutcome), RpcResponse> {
+    let blocked = transition_task_status(
+        store,
+        &task,
+        Some(DomainTaskStatus::Pending),
+        DomainTaskStatus::Blocked,
+        None,
+        None,
+    )?;
+    let now = now_ms();
+    let approval_id = Uuid::new_v4().to_string();
+    let expires_at_ms = now.saturating_add(5 * 60 * 1000);
+    let summary = contract
+        .approval
+        .as_ref()
+        .map(|approval| approval.summary.clone())
+        .or_else(|| contract.reason.clone())
+        .unwrap_or_else(|| "approval required".to_string());
+    let details = contract
+        .approval
+        .as_ref()
+        .and_then(|approval| approval.details.clone());
+    let items = contract
+        .approval
+        .as_ref()
+        .map(|approval| {
+            approval
+                .items
+                .iter()
+                .map(|item| DomainApprovalItem {
+                    kind: item.kind.clone(),
+                    target: item.target.clone(),
+                    summary: item.summary.clone(),
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let policy_reason = contract
+        .reason
+        .clone()
+        .unwrap_or_else(|| "policy requires approval".to_string());
+    let execution_contract_json = approval_snapshot_json(contract, operation);
+
+    let created_approval = store
+        .create_approval(NewApproval {
+            approval_id: approval_id.clone(),
+            session_id: blocked.session_id.clone(),
+            task_id: blocked.task_id.clone(),
+            trace_id: blocked.trace_id.clone(),
+            status: ApprovalStatus::Pending,
+            summary: summary.clone(),
+            details: details.clone(),
+            items,
+            policy_reason,
+            policy_revision: contract.policy_revision,
+            execution_contract_json,
+            created_at_ms: now,
+            expires_at_ms,
+        })
+        .map_err(map_approval_repo_error)?;
+
+    append_task_audit(
+        store,
+        AuditEventType::ApprovalCreated,
+        &blocked,
+        Some(
+            json!({
+                "approval_id": created_approval.approval_id,
+                "summary": created_approval.summary,
+                "expires_at_ms": created_approval.expires_at_ms
+            })
+            .to_string(),
+        ),
+        None,
+    )?;
+    append_task_audit(
+        store,
+        AuditEventType::TaskAwaitingApproval,
+        &blocked,
+        contract.policy_audit_payload_json().ok(),
+        None,
+    )?;
+
+    Ok((
+        blocked,
+        TaskOutcome {
+            outcome: Some(RpcTaskOutcome::Approval(PendingApproval {
+                approval_id,
+                status: to_proto_approval_status(created_approval.status) as i32,
+                expires_at_ms,
+                task_id: created_approval.task_id,
+                summary,
+            })),
+        },
+    ))
+}
+
+fn execute_deny_path(
+    store: &Store,
+    task: af_task::Task,
+    contract: &af_core::ExecutionContract,
+) -> Result<(af_task::Task, TaskOutcome), RpcResponse> {
+    let message = contract
+        .reason
+        .clone()
+        .unwrap_or_else(|| "policy denied task".to_string());
+    let failed = transition_task_status(
+        store,
+        &task,
+        Some(DomainTaskStatus::Pending),
+        DomainTaskStatus::Failed,
+        Some("POLICY_DENIED".to_string()),
+        Some(message.clone()),
+    )?;
+    let stepped = finalize_task_step(store, &failed)?;
+    append_task_audit(
+        store,
+        AuditEventType::PolicyDenied,
+        &stepped,
+        contract.policy_audit_payload_json().ok(),
+        Some("POLICY_DENIED".to_string()),
+    )?;
+    append_task_audit(
+        store,
+        AuditEventType::TaskFailed,
+        &stepped,
+        Some(json!({ "reason": message }).to_string()),
+        Some("POLICY_DENIED".to_string()),
+    )?;
+
+    Ok((
+        stepped,
+        TaskOutcome {
+            outcome: Some(RpcTaskOutcome::Denied(TaskDenied {
+                code: Some("POLICY_DENIED".to_string()),
+                message: contract.reason.clone(),
+            })),
+        },
+    ))
+}
+
+fn transition_task_status(
+    store: &Store,
+    task: &af_task::Task,
+    expected_status: Option<DomainTaskStatus>,
+    next_status: DomainTaskStatus,
+    error_code: Option<String>,
+    error_message: Option<String>,
+) -> Result<af_task::Task, RpcResponse> {
+    let terminal = matches!(
+        next_status,
+        DomainTaskStatus::Completed | DomainTaskStatus::Failed | DomainTaskStatus::Cancelled
+    );
+    store
+        .update_task_status(UpdateTaskStatusCommand {
+            session_id: task.session_id.clone(),
+            task_id: task.task_id.clone(),
+            expected_status,
+            new_status: next_status,
+            updated_at_ms: now_ms(),
+            ended_at_ms: terminal.then(now_ms),
+            error_code,
+            error_message,
+        })
+        .map_err(map_task_repo_error)
+}
+
+fn finalize_task_step(store: &Store, task: &af_task::Task) -> Result<af_task::Task, RpcResponse> {
+    if task.current_step >= 1 {
+        return Ok(task.clone());
+    }
+    store
+        .advance_task_step(AdvanceTaskStepCommand {
+            session_id: task.session_id.clone(),
+            task_id: task.task_id.clone(),
+            expected_current_step: task.current_step,
+            next_step: 1,
+            updated_at_ms: now_ms(),
+        })
+        .map_err(map_task_repo_error)
+}
+
+fn append_task_audit(
+    store: &Store,
+    event_type: AuditEventType,
+    task: &af_task::Task,
+    payload_json: Option<String>,
+    error_code: Option<String>,
+) -> Result<(), RpcResponse> {
+    store
+        .append_event(NewAuditEvent {
+            ts_ms: now_ms(),
+            trace_id: task.trace_id.clone(),
+            session_id: Some(task.session_id.clone()),
+            task_id: Some(task.task_id.clone()),
+            event_type,
+            payload_json,
+            error_code,
+        })
+        .map_err(map_audit_repo_error)?;
+    Ok(())
+}
+
+fn build_sandbox_request(
+    runtime: &ExecutionRuntime,
+    task: &af_task::Task,
+    normalized: &af_core::NormalizedOperation,
+    operation: &TaskOperation,
+) -> Result<SandboxExecRequest, RpcResponse> {
+    let payload = struct_to_json(operation.payload.as_ref());
+    let options = struct_to_json(operation.options.as_ref());
+    let command = extract_command(&payload, &options)?;
+    let cwd = extract_cwd(&payload, &options, runtime.workspace_root.as_deref())?;
+    let env = extract_env(&payload, &options)?;
+    let limits = parse_resource_limits(task.limits_json.as_deref())?;
+    let capture = parse_capture_policy(task.limits_json.as_deref())?;
+    let network = if matches!(normalized.facts.requires_network, Fact::Known(false)) {
+        NetworkPolicy::Disabled
+    } else {
+        NetworkPolicy::Full
+    };
+
+    Ok(SandboxExecRequest {
+        command,
+        cwd,
+        env,
+        filesystem: FilesystemPolicy {
+            mode: FilesystemMode::FullAccess,
+            include_platform_defaults: false,
+            mount_proc: true,
+            readable_roots: Vec::new(),
+            writable_roots: Vec::new(),
+            unreadable_roots: Vec::new(),
+        },
+        network,
+        pty: PtyPolicy::Disabled,
+        limits,
+        governance_mode: ResourceGovernanceMode::BestEffort,
+        syscall_policy: SyscallPolicy::Baseline,
+        capture,
+        trace: TraceContext {
+            session_id: Some(task.session_id.clone()),
+            task_id: Some(task.task_id.clone()),
+            trace_id: Some(task.trace_id.clone()),
+        },
+    })
+}
+
+fn parse_resource_limits(raw: Option<&str>) -> Result<ResourceLimits, RpcResponse> {
+    let mut limits = ResourceLimits::default();
+    let Some(raw) = raw else {
+        return Ok(limits);
+    };
+    let parsed = serde_json::from_str::<Value>(raw).map_err(|error| {
+        err(
+            RpcErrorCode::BadRequest,
+            format!("limits_json parse failed: {error}"),
+        )
+    })?;
+    if let Some(value) = find_u64(&parsed, "wall_timeout_secs") {
+        limits.wall_timeout = Duration::from_secs(value.max(1));
+    }
+    if let Some(value) = find_u64(&parsed, "wall_timeout_ms") {
+        limits.wall_timeout = Duration::from_millis(value.max(1));
+    }
+    limits.cpu_time_limit_seconds = find_u64(&parsed, "cpu_time_limit_seconds");
+    limits.max_memory_bytes = find_u64(&parsed, "max_memory_bytes");
+    limits.max_processes = find_u64(&parsed, "max_processes");
+    limits.max_file_size_bytes = find_u64(&parsed, "max_file_size_bytes");
+    limits.cpu_max_percent =
+        find_u64(&parsed, "cpu_max_percent").and_then(|value| u32::try_from(value).ok());
+    Ok(limits)
+}
+
+fn parse_capture_policy(raw: Option<&str>) -> Result<OutputCapturePolicy, RpcResponse> {
+    let mut capture = OutputCapturePolicy::default();
+    let Some(raw) = raw else {
+        return Ok(capture);
+    };
+    let parsed = serde_json::from_str::<Value>(raw).map_err(|error| {
+        err(
+            RpcErrorCode::BadRequest,
+            format!("limits_json parse failed: {error}"),
+        )
+    })?;
+    if let Some(value) =
+        find_u64(&parsed, "stdout_max_bytes").and_then(|value| usize::try_from(value).ok())
+    {
+        capture.stdout_max_bytes = value.max(1);
+    }
+    if let Some(value) =
+        find_u64(&parsed, "stderr_max_bytes").and_then(|value| usize::try_from(value).ok())
+    {
+        capture.stderr_max_bytes = value.max(1);
+    }
+    Ok(capture)
+}
+
+fn extract_command(payload: &Value, options: &Value) -> Result<Vec<String>, RpcResponse> {
+    let value = payload
+        .as_object()
+        .and_then(|object| object.get("command"))
+        .or_else(|| options.as_object().and_then(|object| object.get("command")));
+
+    let Some(value) = value else {
+        return Err(err(
+            RpcErrorCode::BadRequest,
+            "task operation payload/options.command is required",
+        ));
+    };
+    match value {
+        Value::String(command) => {
+            if command.trim().is_empty() {
+                return Err(err(
+                    RpcErrorCode::BadRequest,
+                    "task operation command string must not be empty",
+                ));
+            }
+            Ok(vec![
+                "/bin/sh".to_string(),
+                "-lc".to_string(),
+                command.to_string(),
+            ])
+        }
+        Value::Array(parts) => {
+            let command = parts
+                .iter()
+                .map(|part| {
+                    part.as_str().map(ToString::to_string).ok_or_else(|| {
+                        err(
+                            RpcErrorCode::BadRequest,
+                            "task operation command array must contain only strings",
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            if command.is_empty() || command[0].trim().is_empty() {
+                return Err(err(
+                    RpcErrorCode::BadRequest,
+                    "task operation command array must contain a non-empty command[0]",
+                ));
+            }
+            Ok(command)
+        }
+        _ => Err(err(
+            RpcErrorCode::BadRequest,
+            "task operation command must be string or string[]",
+        )),
+    }
+}
+
+fn extract_cwd(
+    payload: &Value,
+    options: &Value,
+    workspace_root: Option<&Path>,
+) -> Result<PathBuf, RpcResponse> {
+    let cwd = payload
+        .as_object()
+        .and_then(|object| object.get("cwd"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            options
+                .as_object()
+                .and_then(|object| object.get("cwd"))
+                .and_then(Value::as_str)
+        })
+        .map(PathBuf::from)
+        .or_else(|| workspace_root.map(PathBuf::from))
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("/"));
+
+    let resolved = if cwd.is_absolute() {
+        cwd
+    } else {
+        let base = workspace_root
+            .map(PathBuf::from)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("/"));
+        base.join(cwd)
+    };
+    if !resolved.is_absolute() {
+        return Err(err(
+            RpcErrorCode::BadRequest,
+            format!("resolved cwd must be absolute: {}", resolved.display()),
+        ));
+    }
+    Ok(resolved)
+}
+
+fn extract_env(payload: &Value, options: &Value) -> Result<BTreeMap<String, String>, RpcResponse> {
+    let env_value = payload
+        .as_object()
+        .and_then(|object| object.get("env"))
+        .or_else(|| options.as_object().and_then(|object| object.get("env")));
+    let Some(env_value) = env_value else {
+        return Ok(BTreeMap::new());
+    };
+    let object = env_value.as_object().ok_or_else(|| {
+        err(
+            RpcErrorCode::BadRequest,
+            "task operation env must be an object of string values",
+        )
+    })?;
+    object
+        .iter()
+        .map(|(key, value)| {
+            value
+                .as_str()
+                .map(|value| (key.clone(), value.to_string()))
+                .ok_or_else(|| {
+                    err(
+                        RpcErrorCode::BadRequest,
+                        format!("task operation env value must be string: key={key}"),
+                    )
+                })
+        })
+        .collect()
+}
+
+fn build_execution_effects(
+    normalized: &af_core::NormalizedOperation,
+    command: &[String],
+) -> Vec<ExecutionEffect> {
+    let mut effects = Vec::new();
+    let mut seen = BTreeSet::<(i32, String)>::new();
+
+    let write_from_paths = matches!(
+        normalized.intent.kind,
+        OperationKind::FileWrite | OperationKind::FilePatch
+    ) || (matches!(normalized.intent.kind, OperationKind::Fetch)
+        && matches!(normalized.facts.requires_write, Fact::Known(true)));
+
+    if matches!(normalized.intent.kind, OperationKind::FileRead) {
+        for path in &normalized.facts.affected_paths {
+            push_execution_effect(
+                &mut effects,
+                &mut seen,
+                ExecutionEffectKind::FileRead,
+                path.display().to_string(),
+            );
+        }
+    } else if write_from_paths {
+        for path in &normalized.facts.affected_paths {
+            push_execution_effect(
+                &mut effects,
+                &mut seen,
+                ExecutionEffectKind::FileWrite,
+                path.display().to_string(),
+            );
+        }
+    }
+
+    if matches!(normalized.facts.requires_network, Fact::Known(true)) {
+        let mut hosts = normalized
+            .intent
+            .targets
+            .iter()
+            .filter(|target| target.kind == TargetKind::Host)
+            .map(|target| target.value.clone())
+            .collect::<Vec<_>>();
+        if let Fact::Known(host) = normalized.facts.primary_host.as_ref() {
+            hosts.push(host.to_string());
+        }
+        if hosts.is_empty() {
+            push_execution_effect(
+                &mut effects,
+                &mut seen,
+                ExecutionEffectKind::NetworkEgress,
+                "*".to_string(),
+            );
+        } else {
+            for host in hosts {
+                push_execution_effect(
+                    &mut effects,
+                    &mut seen,
+                    ExecutionEffectKind::NetworkEgress,
+                    host,
+                );
+            }
+        }
+    }
+
+    let command_target = normalized
+        .intent
+        .targets
+        .iter()
+        .find(|target| target.kind == TargetKind::Path)
+        .map(|target| target.value.clone())
+        .or_else(|| command.first().cloned());
+    if let Some(command_target) = command_target {
+        push_execution_effect(
+            &mut effects,
+            &mut seen,
+            ExecutionEffectKind::ProcessExec,
+            command_target,
+        );
+    }
+
+    effects
+}
+
+fn push_execution_effect(
+    effects: &mut Vec<ExecutionEffect>,
+    seen: &mut BTreeSet<(i32, String)>,
+    kind: ExecutionEffectKind,
+    target: String,
+) {
+    if target.trim().is_empty() {
+        return;
+    }
+    let key = (kind as i32, target.clone());
+    if seen.insert(key) {
+        effects.push(ExecutionEffect {
+            kind: kind as i32,
+            target,
+        });
+    }
+}
+
+fn execution_result_from_sandbox(result: SandboxExecResult) -> ExecutionResult {
+    let state = if result.timed_out {
+        "timed_out".to_string()
+    } else if matches!(result.status, SandboxExitStatus::Exited) && result.exit_code == Some(0) {
+        "completed".to_string()
+    } else {
+        "failed".to_string()
+    };
+    ExecutionResult {
+        state,
+        exit_code: result.exit_code,
+        timed_out: result.timed_out,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        stdout_truncated: result.stdout_truncated,
+        stderr_truncated: result.stderr_truncated,
+        effects: Vec::new(),
+    }
+}
+
+fn failure_execution_result(message: String) -> ExecutionResult {
+    ExecutionResult {
+        state: "failed".to_string(),
+        exit_code: None,
+        timed_out: false,
+        stdout: String::new(),
+        stderr: message,
+        stdout_truncated: false,
+        stderr_truncated: false,
+        effects: Vec::new(),
+    }
+}
+
+fn execution_payload_json(result: &ExecutionResult) -> String {
+    json!({
+        "state": result.state,
+        "exit_code": result.exit_code,
+        "timed_out": result.timed_out,
+        "stdout_truncated": result.stdout_truncated,
+        "stderr_truncated": result.stderr_truncated,
+    })
+    .to_string()
+}
+
+fn approval_snapshot_json(
+    contract: &af_core::ExecutionContract,
+    operation: &TaskOperation,
+) -> String {
+    json!({
+        "schema": "task_approval_snapshot.v1",
+        "contract": contract.policy_audit_payload(),
+        "operation": task_operation_to_json(operation),
+    })
+    .to_string()
+}
+
+fn task_operation_from_approval_snapshot(raw: &str) -> Result<TaskOperation, RpcResponse> {
+    let parsed = serde_json::from_str::<Value>(raw).map_err(|error| {
+        err(
+            RpcErrorCode::InternalError,
+            format!("approval snapshot parse failed: {error}"),
+        )
+    })?;
+    let object = parsed.as_object().ok_or_else(|| {
+        err(
+            RpcErrorCode::InternalError,
+            "approval snapshot must be a JSON object",
+        )
+    })?;
+    let schema = object
+        .get("schema")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            err(
+                RpcErrorCode::InternalError,
+                "approval snapshot missing schema",
+            )
+        })?;
+    if schema != "task_approval_snapshot.v1" {
+        return Err(err(
+            RpcErrorCode::InternalError,
+            format!("unsupported approval snapshot schema: {schema}"),
+        ));
+    }
+    let operation_value = object.get("operation").ok_or_else(|| {
+        err(
+            RpcErrorCode::InternalError,
+            "approval snapshot missing operation payload",
+        )
+    })?;
+    task_operation_from_json(operation_value)
+}
+
+fn task_operation_to_json(operation: &TaskOperation) -> Value {
+    json!({
+        "kind": operation.kind,
+        "payload": struct_to_json(operation.payload.as_ref()),
+        "options": struct_to_json(operation.options.as_ref()),
+        "labels": operation.labels,
+    })
+}
+
+fn task_operation_from_json(value: &Value) -> Result<TaskOperation, RpcResponse> {
+    let object = value.as_object().ok_or_else(|| {
+        err(
+            RpcErrorCode::InternalError,
+            "approval snapshot operation must be object",
+        )
+    })?;
+    let kind = object
+        .get("kind")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|kind| !kind.is_empty())
+        .ok_or_else(|| {
+            err(
+                RpcErrorCode::InternalError,
+                "approval snapshot operation.kind must not be empty",
+            )
+        })?;
+
+    let payload = maybe_json_to_prost_struct(object.get("payload"))?;
+    let options = maybe_json_to_prost_struct(object.get("options"))?;
+    let labels = object
+        .get("labels")
+        .and_then(Value::as_object)
+        .map(|labels| {
+            labels
+                .iter()
+                .map(|(key, value)| {
+                    value
+                        .as_str()
+                        .map(|value| (key.clone(), value.to_string()))
+                        .ok_or_else(|| {
+                            err(
+                                RpcErrorCode::InternalError,
+                                format!(
+                                    "approval snapshot operation.labels must be string map: key={key}"
+                                ),
+                            )
+                        })
+                })
+                .collect::<Result<HashMap<_, _>, _>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+
+    Ok(TaskOperation {
+        kind: kind.to_string(),
+        payload,
+        options,
+        labels,
+    })
+}
+
+fn maybe_json_to_prost_struct(
+    value: Option<&Value>,
+) -> Result<Option<prost_types::Struct>, RpcResponse> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => Ok(Some(json_to_prost_struct(value)?)),
+    }
+}
+
+fn json_to_prost_struct(value: &Value) -> Result<prost_types::Struct, RpcResponse> {
+    let object = value.as_object().ok_or_else(|| {
+        err(
+            RpcErrorCode::InternalError,
+            "operation payload/options must be object",
+        )
+    })?;
+    let fields = object
+        .iter()
+        .map(|(key, value)| (key.clone(), json_to_proto_value(value)))
+        .collect::<BTreeMap<_, _>>();
+    Ok(prost_types::Struct { fields })
+}
+
+fn json_to_proto_value(value: &Value) -> prost_types::Value {
+    match value {
+        Value::Null => prost_types::Value {
+            kind: Some(prost_types::value::Kind::NullValue(0)),
+        },
+        Value::Bool(flag) => prost_types::Value {
+            kind: Some(prost_types::value::Kind::BoolValue(*flag)),
+        },
+        Value::Number(number) => prost_types::Value {
+            kind: Some(prost_types::value::Kind::NumberValue(
+                number.as_f64().unwrap_or_default(),
+            )),
+        },
+        Value::String(text) => prost_types::Value {
+            kind: Some(prost_types::value::Kind::StringValue(text.clone())),
+        },
+        Value::Array(list) => prost_types::Value {
+            kind: Some(prost_types::value::Kind::ListValue(
+                prost_types::ListValue {
+                    values: list.iter().map(json_to_proto_value).collect(),
+                },
+            )),
+        },
+        Value::Object(object) => prost_types::Value {
+            kind: Some(prost_types::value::Kind::StructValue(prost_types::Struct {
+                fields: object
+                    .iter()
+                    .map(|(key, value)| (key.clone(), json_to_proto_value(value)))
+                    .collect(),
+            })),
+        },
+    }
+}
+
+fn struct_to_json(value: Option<&prost_types::Struct>) -> Value {
+    let Some(value) = value else {
+        return Value::Object(Default::default());
+    };
+    let map = value
+        .fields
+        .iter()
+        .map(|(key, value)| (key.clone(), proto_value_to_json(value)))
+        .collect::<serde_json::Map<String, Value>>();
+    Value::Object(map)
+}
+
+fn proto_value_to_json(value: &prost_types::Value) -> Value {
+    match value.kind.as_ref() {
+        Some(prost_types::value::Kind::NullValue(_)) | None => Value::Null,
+        Some(prost_types::value::Kind::NumberValue(number)) => json!(number),
+        Some(prost_types::value::Kind::StringValue(text)) => Value::String(text.clone()),
+        Some(prost_types::value::Kind::BoolValue(flag)) => Value::Bool(*flag),
+        Some(prost_types::value::Kind::StructValue(object)) => {
+            let map = object
+                .fields
+                .iter()
+                .map(|(key, value)| (key.clone(), proto_value_to_json(value)))
+                .collect::<serde_json::Map<String, Value>>();
+            Value::Object(map)
+        }
+        Some(prost_types::value::Kind::ListValue(list)) => Value::Array(
+            list.values
+                .iter()
+                .map(proto_value_to_json)
+                .collect::<Vec<_>>(),
+        ),
+    }
+}
+
+fn find_u64(value: &Value, key: &str) -> Option<u64> {
+    value
+        .as_object()
+        .and_then(|object| object.get(key))
+        .and_then(|value| match value {
+            Value::Number(number) => number.as_u64(),
+            Value::String(text) => text.parse::<u64>().ok(),
+            _ => None,
+        })
+}
+
+fn map_task_repo_error(error: af_task::TaskRepositoryError) -> RpcResponse {
+    match error {
+        af_task::TaskRepositoryError::NotFound { .. } => {
+            err(RpcErrorCode::TaskNotFound, "task not found")
+        }
+        af_task::TaskRepositoryError::Validation { message } => {
+            err(RpcErrorCode::BadRequest, message)
+        }
+        af_task::TaskRepositoryError::InvalidState { message }
+        | af_task::TaskRepositoryError::Conflict { message } => {
+            err(RpcErrorCode::InvalidTaskState, message)
+        }
+        af_task::TaskRepositoryError::AlreadyExists { .. }
+        | af_task::TaskRepositoryError::Storage { .. } => err(
+            RpcErrorCode::StoreError,
+            format!("task repository failed: {error}"),
+        ),
+    }
+}
+
+fn map_approval_repo_error(error: af_approval::ApprovalRepositoryError) -> RpcResponse {
+    match error {
+        af_approval::ApprovalRepositoryError::Validation { message } => {
+            err(RpcErrorCode::BadRequest, message)
+        }
+        af_approval::ApprovalRepositoryError::AlreadyExists { .. }
+        | af_approval::ApprovalRepositoryError::Conflict { .. }
+        | af_approval::ApprovalRepositoryError::Storage { .. }
+        | af_approval::ApprovalRepositoryError::NotFound { .. }
+        | af_approval::ApprovalRepositoryError::Expired { .. }
+        | af_approval::ApprovalRepositoryError::IdempotencyConflict { .. }
+        | af_approval::ApprovalRepositoryError::InvalidState { .. } => err(
+            RpcErrorCode::StoreError,
+            format!("approval repository failed: {error}"),
+        ),
+    }
+}
+
+fn map_audit_repo_error(error: af_audit::AuditRepositoryError) -> RpcResponse {
+    err(
+        RpcErrorCode::AuditWriteFailed,
+        format!("audit repository failed: {error}"),
+    )
 }
 
 fn map_session_lookup_error(error: SessionRepositoryError) -> RpcResponse {
@@ -623,9 +1735,15 @@ fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, HashMap};
+    use std::path::PathBuf;
+
     use super::*;
     use af_approval::{ApprovalItem, ApprovalRepository, ApprovalStatus, NewApproval};
     use af_audit::{AuditCursor, AuditEventType, AuditRepository};
+    use af_core::{
+        Facts, Intent, NormalizedOperation, OperationKind, RuntimeContext, Target, TargetKind,
+    };
     use af_rpc_transport::{Endpoint, RpcClient, RpcServer};
     use af_session::{NewSession, SessionLease, SessionRepository};
     use af_store::StoreOptions;
@@ -937,7 +2055,7 @@ mod tests {
                 }],
                 policy_reason: "needs manual approval".to_string(),
                 policy_revision: 1,
-                execution_contract_json: "{\"decision\":\"ask\"}".to_string(),
+                execution_contract_json: test_approval_snapshot_json(),
                 created_at_ms: 1_000,
                 expires_at_ms: now_ms() + 60_000,
             })
@@ -994,6 +2112,7 @@ mod tests {
             responded.task.as_ref().expect("task must exist").status,
             TaskStatus::Pending as i32
         );
+        assert!(responded.outcome.is_none());
 
         let task = store
             .get_task(&created_session.session_id, "task-approval-1")
@@ -1017,8 +2136,241 @@ mod tests {
         assert!(
             events
                 .iter()
-                .any(|event| event.event_type == AuditEventType::InvocationResumedAfterApproval)
+                .any(|event| event.event_type == AuditEventType::TaskResumedAfterApproval)
         );
+    }
+
+    #[test]
+    fn respond_approval_deny_returns_denied_outcome() {
+        let store = Arc::new(Store::open(StoreOptions::in_memory()).expect("open store"));
+        let controller = RpcController::new("daemon-1".to_string(), store.clone());
+
+        let session_response = controller.dispatch(RpcRequest {
+            method: RpcMethod::CreateSession as i32,
+            payload: encode_message(&CreateSessionRequest {
+                agent_name: "agent-1".to_string(),
+                client_instance_id: "client-1".to_string(),
+                lease_ttl_secs: Some(30),
+            }),
+        });
+        let session_payload = match session_response.outcome {
+            Some(rpc_response::Outcome::Payload(payload)) => payload,
+            other => panic!("expected payload response, got {other:?}"),
+        };
+        let created_session = decode_message::<CreateSessionResponse>(&session_payload)
+            .expect("decode create session response")
+            .session
+            .expect("session must exist");
+        let lease = created_session.lease.clone().expect("lease must exist");
+
+        store
+            .create_task(NewTask {
+                task_id: "task-approval-deny".to_string(),
+                session_id: created_session.session_id.clone(),
+                status: DomainTaskStatus::Blocked,
+                goal: Some("wait approval".to_string()),
+                created_by: TaskCreatedBy::Explicit,
+                trace_id: "trace-approval-deny".to_string(),
+                limits_json: None,
+                current_step: 0,
+                created_at_ms: 1_000,
+                updated_at_ms: 1_000,
+            })
+            .expect("create blocked task");
+        store
+            .create_approval(NewApproval {
+                approval_id: "approval-deny".to_string(),
+                session_id: created_session.session_id.clone(),
+                task_id: "task-approval-deny".to_string(),
+                trace_id: "trace-approval-deny".to_string(),
+                status: ApprovalStatus::Pending,
+                summary: "network access requires approval".to_string(),
+                details: None,
+                items: vec![],
+                policy_reason: "needs manual approval".to_string(),
+                policy_revision: 1,
+                execution_contract_json: test_approval_snapshot_json(),
+                created_at_ms: 1_000,
+                expires_at_ms: now_ms() + 60_000,
+            })
+            .expect("create approval");
+
+        let respond_response = controller.dispatch(RpcRequest {
+            method: RpcMethod::RespondApproval as i32,
+            payload: encode_message(&RespondApprovalRequest {
+                session_id: created_session.session_id.clone(),
+                approval_id: "approval-deny".to_string(),
+                decision: RpcApprovalDecision::Deny as i32,
+                idempotency_key: "idem-approval-deny".to_string(),
+                reason: Some("denied".to_string()),
+                client_instance_id: lease.client_instance_id,
+                rebind_token: lease.rebind_token,
+            }),
+        });
+        let respond_payload = match respond_response.outcome {
+            Some(rpc_response::Outcome::Payload(payload)) => payload,
+            other => panic!("expected payload response, got {other:?}"),
+        };
+        let responded = decode_message::<RespondApprovalResponse>(&respond_payload)
+            .expect("decode respond approval response");
+        assert_eq!(
+            responded.task.as_ref().expect("task must exist").status,
+            TaskStatus::Failed as i32
+        );
+        let outcome = responded
+            .outcome
+            .as_ref()
+            .and_then(|outcome| outcome.outcome.as_ref())
+            .expect("denied outcome must exist");
+        match outcome {
+            RpcTaskOutcome::Denied(denied) => {
+                assert_eq!(denied.code.as_deref(), Some("APPROVAL_DENIED"));
+            }
+            other => panic!("expected denied outcome, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_execution_effects_projects_write_network_and_process_effects() {
+        let normalized = NormalizedOperation {
+            intent: Intent {
+                kind: OperationKind::Fetch,
+                labels: Default::default(),
+                tags: Default::default(),
+                targets: vec![Target {
+                    kind: TargetKind::Host,
+                    value: "example.com".to_string(),
+                }],
+            },
+            facts: Facts {
+                interactive: Fact::Known(false),
+                requires_network: Fact::Known(true),
+                requires_write: Fact::Known(true),
+                touches_policy_dir: Fact::Known(false),
+                primary_host: Fact::Known("example.com".to_string()),
+                affected_paths: vec![PathBuf::from("/tmp/out.txt")],
+            },
+            runtime: RuntimeContext {
+                platform: RuntimePlatform::Linux,
+                daemon_instance_id: "daemon-1".to_string(),
+                policy_dir: PathBuf::from("/tmp/policies"),
+                workspace_root: Some(PathBuf::from("/tmp")),
+            },
+        };
+
+        let effects = build_execution_effects(&normalized, &["curl".to_string()]);
+
+        assert!(has_effect(
+            &effects,
+            ExecutionEffectKind::FileWrite,
+            "/tmp/out.txt"
+        ));
+        assert!(has_effect(
+            &effects,
+            ExecutionEffectKind::NetworkEgress,
+            "example.com"
+        ));
+        assert!(has_effect(
+            &effects,
+            ExecutionEffectKind::ProcessExec,
+            "curl"
+        ));
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|effect| effect.kind == ExecutionEffectKind::NetworkEgress as i32)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn build_execution_effects_network_unknown_host_uses_wildcard() {
+        let normalized = NormalizedOperation {
+            intent: Intent {
+                kind: OperationKind::Exec,
+                labels: Default::default(),
+                tags: Default::default(),
+                targets: Vec::new(),
+            },
+            facts: Facts {
+                interactive: Fact::Known(false),
+                requires_network: Fact::Known(true),
+                requires_write: Fact::Unknown,
+                touches_policy_dir: Fact::Known(false),
+                primary_host: Fact::Unknown,
+                affected_paths: Vec::new(),
+            },
+            runtime: RuntimeContext {
+                platform: RuntimePlatform::Linux,
+                daemon_instance_id: "daemon-1".to_string(),
+                policy_dir: PathBuf::from("/tmp/policies"),
+                workspace_root: Some(PathBuf::from("/tmp")),
+            },
+        };
+
+        let effects = build_execution_effects(&normalized, &["/bin/sh".to_string()]);
+        assert!(has_effect(
+            &effects,
+            ExecutionEffectKind::NetworkEgress,
+            "*"
+        ));
+    }
+
+    #[test]
+    fn approval_snapshot_round_trip_recovers_task_operation() {
+        let operation = TaskOperation {
+            kind: "exec".to_string(),
+            payload: Some(prost_types::Struct {
+                fields: BTreeMap::from([(
+                    "command".to_string(),
+                    prost_types::Value {
+                        kind: Some(prost_types::value::Kind::StringValue(
+                            "echo hello".to_string(),
+                        )),
+                    },
+                )]),
+            }),
+            options: None,
+            labels: HashMap::from([("k".to_string(), "v".to_string())]),
+        };
+        let snapshot = approval_snapshot_json(
+            &af_core::ExecutionContract {
+                decision: PolicyDecision::Ask,
+                reason: Some("approval".to_string()),
+                runtime_backend: None,
+                requirements: Vec::new(),
+                approval: None,
+                policy_revision: 1,
+                matched_rule: None,
+                evaluation_trace: af_core::PolicyEvaluationTrace::new(1, vec!["r1".to_string()]),
+                fail_closed: false,
+            },
+            &operation,
+        );
+
+        let recovered = task_operation_from_approval_snapshot(&snapshot).expect("parse snapshot");
+        assert_eq!(recovered.kind, operation.kind);
+        assert_eq!(recovered.labels, operation.labels);
+        assert!(recovered.payload.is_some());
+    }
+
+    #[test]
+    fn approval_snapshot_rejects_missing_operation() {
+        let error =
+            task_operation_from_approval_snapshot("{\"schema\":\"task_approval_snapshot.v1\"}")
+                .expect_err("missing operation must fail");
+        let rpc_error = match error.outcome {
+            Some(rpc_response::Outcome::Error(error)) => error,
+            other => panic!("expected rpc error response, got {other:?}"),
+        };
+        assert_eq!(rpc_error.code, RpcErrorCode::InternalError as i32);
+    }
+
+    fn has_effect(effects: &[ExecutionEffect], kind: ExecutionEffectKind, target: &str) -> bool {
+        effects
+            .iter()
+            .any(|effect| effect.kind == kind as i32 && effect.target == target)
     }
 
     fn test_task_operation() -> af_rpc_proto::TaskOperation {
@@ -1028,6 +2380,22 @@ mod tests {
             options: None,
             labels: Default::default(),
         }
+    }
+
+    fn test_approval_snapshot_json() -> String {
+        json!({
+            "schema": "task_approval_snapshot.v1",
+            "contract": {
+                "final_decision": "ask"
+            },
+            "operation": {
+                "kind": "exec",
+                "payload": {},
+                "options": {},
+                "labels": {}
+            }
+        })
+        .to_string()
     }
 
     #[test]

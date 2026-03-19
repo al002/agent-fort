@@ -383,7 +383,7 @@ fn task_service_writes_task_and_audit_atomically() {
 }
 
 #[test]
-fn respond_approval_skips_invocation_audit_when_task_status_does_not_change() {
+fn respond_approval_skips_task_approval_audit_when_task_status_does_not_change() {
     let store = Store::open(StoreOptions::in_memory()).expect("open in-memory store");
     create_base_session(&store, "session-1");
     create_base_task(&store, "session-1", "task-1", "trace-1");

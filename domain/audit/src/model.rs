@@ -14,13 +14,13 @@ pub enum AuditEventType {
     ApprovalExpired,
     ApprovalCancelled,
     PolicyDenied,
-    InvocationStarted,
-    InvocationAwaitingApproval,
-    InvocationResumedAfterApproval,
-    InvocationCompleted,
-    InvocationDenied,
-    InvocationCancelled,
-    InvocationFailed,
+    TaskExecutionStarted,
+    TaskAwaitingApproval,
+    TaskResumedAfterApproval,
+    TaskExecutionCompleted,
+    TaskDeniedByApproval,
+    TaskExecutionCancelled,
+    TaskExecutionFailed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

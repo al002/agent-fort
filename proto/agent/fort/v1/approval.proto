@@ -33,14 +33,6 @@ message Approval {
   optional string response_idempotency_key = 13;
 }
 
-message InvokeResult {
-  Task task = 1;
-  oneof outcome {
-    ExecutionResult execution = 2;
-    PendingApproval approval = 3;
-  }
-}
-
 message GetApprovalRequest {
   string session_id = 1;
   string approval_id = 2;
@@ -65,5 +57,5 @@ message RespondApprovalRequest {
 message RespondApprovalResponse {
   Approval approval = 1;
   Task task = 2;
-  optional InvokeResult invoke_result = 3;
+  TaskOutcome outcome = 3;
 }

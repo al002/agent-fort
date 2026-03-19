@@ -35,6 +35,20 @@ message ExecutionResult {
   string stderr = 5;
   bool stdout_truncated = 6;
   bool stderr_truncated = 7;
+  repeated ExecutionEffect effects = 8;
+}
+
+enum ExecutionEffectKind {
+  EXECUTION_EFFECT_KIND_UNSPECIFIED = 0;
+  EXECUTION_EFFECT_KIND_FILE_READ = 1;
+  EXECUTION_EFFECT_KIND_FILE_WRITE = 2;
+  EXECUTION_EFFECT_KIND_NETWORK_EGRESS = 3;
+  EXECUTION_EFFECT_KIND_PROCESS_EXEC = 4;
+}
+
+message ExecutionEffect {
+  ExecutionEffectKind kind = 1;
+  string target = 2;
 }
 
 message PendingApproval {

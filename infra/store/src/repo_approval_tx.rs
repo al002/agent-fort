@@ -107,7 +107,7 @@ fn respond_with_effect(
         let next_task = transition_task_for_approval(&tx, &task, &approval, &command)?;
         append_approval_audit_event(&tx, &approval, &command)?;
         if next_task.status != task.status {
-            append_invocation_audit_event(
+            append_task_approval_audit_event(
                 &tx,
                 &approval,
                 command.decision,
@@ -228,15 +228,15 @@ fn append_approval_audit_event(
     Ok(())
 }
 
-fn append_invocation_audit_event(
+fn append_task_approval_audit_event(
     tx: &rusqlite::Transaction<'_>,
     approval: &Approval,
     decision: ApprovalDecision,
     responded_at_ms: u64,
 ) -> StoreResult<()> {
     let event_type = match decision {
-        ApprovalDecision::Approve => AuditEventType::InvocationResumedAfterApproval,
-        ApprovalDecision::Deny => AuditEventType::InvocationDenied,
+        ApprovalDecision::Approve => AuditEventType::TaskResumedAfterApproval,
+        ApprovalDecision::Deny => AuditEventType::TaskDeniedByApproval,
     };
     tx.execute(
         "INSERT INTO audit_events (
@@ -250,7 +250,7 @@ fn append_invocation_audit_event(
             audit_event_type_to_db(event_type),
         ],
     )
-    .map_err(|error| sql_err("insert invocation audit event in tx", error))?;
+    .map_err(|error| sql_err("insert task approval audit event in tx", error))?;
     Ok(())
 }
 

@@ -61,8 +61,10 @@ dependencies = [
 name = "af-example-agent-tui"
 version = "0.1.0"
 dependencies = [
+ "af-rpc-proto",
  "af-sdk",
  "crossterm 0.29.0",
+ "prost-types",
  "ratatui",
  "tokio",
 ]
@@ -187,6 +189,7 @@ dependencies = [
  "af-approval",
  "af-audit",
  "af-core",
+ "af-policy",
  "af-policy-infra",
  "af-rpc-proto",
  "af-rpc-transport",
@@ -195,6 +198,7 @@ dependencies = [
  "af-store",
  "af-task",
  "anyhow",
+ "prost-types",
  "serde_json",
  "tempfile",
  "tokio",

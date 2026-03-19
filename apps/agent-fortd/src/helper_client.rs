@@ -125,7 +125,7 @@ mod tests {
             network: NetworkPolicy::Full,
             pty: PtyPolicy::Disabled,
             limits: ResourceLimits {
-                wall_timeout: Duration::from_secs(5),
+                elapsed_timeout: Duration::from_secs(5),
                 cpu_time_limit_seconds: None,
                 max_memory_bytes: None,
                 max_processes: None,

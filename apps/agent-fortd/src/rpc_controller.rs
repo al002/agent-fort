@@ -1072,11 +1072,11 @@ fn parse_resource_limits(parsed: Option<&Value>) -> ResourceLimits {
     let Some(parsed) = parsed else {
         return limits;
     };
-    if let Some(value) = find_u64(&parsed, "wall_timeout_secs") {
-        limits.wall_timeout = Duration::from_secs(value.max(1));
+    if let Some(value) = find_u64(&parsed, "elapsed_timeout_secs") {
+        limits.elapsed_timeout = Duration::from_secs(value.max(1));
     }
-    if let Some(value) = find_u64(&parsed, "wall_timeout_ms") {
-        limits.wall_timeout = Duration::from_millis(value.max(1));
+    if let Some(value) = find_u64(&parsed, "elapsed_timeout_ms") {
+        limits.elapsed_timeout = Duration::from_millis(value.max(1));
     }
     limits.cpu_time_limit_seconds = find_u64(&parsed, "cpu_time_limit_seconds");
     limits.max_memory_bytes = find_u64(&parsed, "max_memory_bytes");

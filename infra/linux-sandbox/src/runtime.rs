@@ -141,7 +141,7 @@ impl SandboxRuntime for LinuxSandboxRuntime {
         let stdout_thread = spawn_capture_thread(stdout, request.capture.stdout_max_bytes);
         let stderr_thread = spawn_capture_thread(stderr, request.capture.stderr_max_bytes);
 
-        let deadline = started_at + request.limits.wall_timeout;
+        let deadline = started_at + request.limits.elapsed_timeout;
         let (status, timed_out) = match wait_child_with_timeout(&mut child, deadline) {
             Ok(value) => value,
             Err(err) => {
@@ -547,7 +547,7 @@ mod tests {
             network: NetworkPolicy::Full,
             pty: PtyPolicy::Disabled,
             limits: ResourceLimits {
-                wall_timeout: Duration::from_secs(5),
+                elapsed_timeout: Duration::from_secs(5),
                 cpu_time_limit_seconds: None,
                 max_memory_bytes: None,
                 max_processes: None,
@@ -587,7 +587,7 @@ mod tests {
             "-c".to_string(),
             "sleep 3".to_string(),
         ]);
-        request.limits.wall_timeout = Duration::from_millis(150);
+        request.limits.elapsed_timeout = Duration::from_millis(150);
 
         let result = runtime.execute(request).expect("execute request");
         assert!(result.timed_out);

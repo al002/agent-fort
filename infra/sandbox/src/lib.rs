@@ -107,7 +107,7 @@ impl Default for OutputCapturePolicy {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResourceLimits {
-    pub wall_timeout: Duration,
+    pub elapsed_timeout: Duration,
     pub cpu_time_limit_seconds: Option<u64>,
     pub max_memory_bytes: Option<u64>,
     pub max_processes: Option<u64>,
@@ -118,7 +118,7 @@ pub struct ResourceLimits {
 impl Default for ResourceLimits {
     fn default() -> Self {
         Self {
-            wall_timeout: Duration::from_secs(30),
+            elapsed_timeout: Duration::from_secs(60),
             cpu_time_limit_seconds: None,
             max_memory_bytes: None,
             max_processes: None,
@@ -168,9 +168,9 @@ impl SandboxExecRequest {
                 self.cwd.display()
             )));
         }
-        if self.limits.wall_timeout.is_zero() {
+        if self.limits.elapsed_timeout.is_zero() {
             return Err(SandboxError::InvalidRequest(
-                "wall timeout must be greater than 0".to_string(),
+                "elapsed timeout must be greater than 0".to_string(),
             ));
         }
         if self.capture.stdout_max_bytes == 0 || self.capture.stderr_max_bytes == 0 {

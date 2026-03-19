@@ -30,6 +30,17 @@ impl<'a> TaskClient<'a> {
     /// `rebind_token` must match the current session lease for the given `session_id`.
     /// For `exec` tasks, use [`crate::exec_operation`] to build a valid operation payload.
     ///
+    /// Valid operation kinds in capability-first mode:
+    /// - `exec`
+    /// - `fs.read`
+    /// - `fs.write`
+    /// - `net`
+    /// - `tool`
+    ///
+    /// Runtime/backend override fields are rejected by daemon validation.
+    /// Do not put `sandbox`, `runtime_backend`, `backend`, `mounts`, or similar
+    /// override keys in operation payload/options/labels.
+    ///
     /// # Errors
     /// Returns transport, RPC, or protocol decode errors.
     ///
@@ -60,7 +71,6 @@ impl<'a> TaskClient<'a> {
     ///             rebind_token,
     ///             exec_operation("ls"),
     ///             Some("exec: ls".to_string()),
-    ///             None,
     ///         )
     ///         .await?;
     ///     Ok(())
@@ -72,10 +82,9 @@ impl<'a> TaskClient<'a> {
         rebind_token: String,
         operation: TaskOperation,
         goal: Option<String>,
-        limits_json: Option<String>,
     ) -> Result<CreateTaskResponse> {
         self.runtime
-            .create_task(session_id, rebind_token, operation, goal, limits_json)
+            .create_task(session_id, rebind_token, operation, goal)
             .await
     }
 }

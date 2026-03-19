@@ -3,7 +3,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use af_audit::{AuditEventType, NewAuditEvent};
 use af_task::{NewTask, Task, TaskCreatedBy, TaskStatus};
-use serde_json::Value;
 use uuid::Uuid;
 
 use crate::errors::TaskAppError;
@@ -12,7 +11,6 @@ use crate::errors::TaskAppError;
 pub struct CreateTaskInput {
     pub session_id: String,
     pub goal: Option<String>,
-    pub limits_json: Option<String>,
     pub created_by: TaskCreatedBy,
 }
 
@@ -63,7 +61,6 @@ impl TaskAppService {
 
     pub fn create_task(&self, input: CreateTaskInput) -> Result<Task, TaskAppError> {
         validate_non_empty("session_id", &input.session_id)?;
-        validate_limits_json(input.limits_json.as_deref())?;
 
         let now_ms = now_ms();
         let task_id = Uuid::new_v4().to_string();
@@ -76,7 +73,6 @@ impl TaskAppService {
                 goal: input.goal,
                 created_by: input.created_by,
                 trace_id: trace_id.clone(),
-                limits_json: input.limits_json,
                 current_step: 0,
                 created_at_ms: now_ms,
                 updated_at_ms: now_ms,
@@ -122,16 +118,6 @@ fn validate_non_empty(field: &str, value: &str) -> Result<(), TaskAppError> {
     Ok(())
 }
 
-fn validate_limits_json(raw: Option<&str>) -> Result<(), TaskAppError> {
-    let Some(raw) = raw else {
-        return Ok(());
-    };
-    serde_json::from_str::<Value>(raw).map_err(|error| TaskAppError::Validation {
-        message: format!("limits_json must be valid json: {error}"),
-    })?;
-    Ok(())
-}
-
 fn now_ms() -> u64 {
     let now = SystemTime::now();
     let elapsed = now
@@ -171,7 +157,6 @@ mod tests {
                 goal: write.task.goal.clone(),
                 created_by: write.task.created_by,
                 trace_id: write.task.trace_id.clone(),
-                limits_json: write.task.limits_json.clone(),
                 current_step: write.task.current_step,
                 error_code: None,
                 error_message: None,
@@ -191,7 +176,6 @@ mod tests {
                 goal: None,
                 created_by: TaskCreatedBy::Explicit,
                 trace_id: "trace-1".to_string(),
-                limits_json: None,
                 current_step: 0,
                 error_code: None,
                 error_message: None,
@@ -210,7 +194,6 @@ mod tests {
                 goal: None,
                 created_by: TaskCreatedBy::Explicit,
                 trace_id: "trace-1".to_string(),
-                limits_json: None,
                 current_step: 0,
                 error_code: None,
                 error_message: None,
@@ -222,18 +205,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_limits_json() {
-        let service = TaskAppService::new(Arc::new(StubPort::new()));
-        let result = service.create_task(CreateTaskInput {
-            session_id: "s-1".to_string(),
-            goal: None,
-            limits_json: Some("{bad".to_string()),
-            created_by: TaskCreatedBy::Explicit,
-        });
-        assert!(matches!(result, Err(TaskAppError::Validation { .. })));
-    }
-
-    #[test]
     fn create_task_writes_pending_task_and_task_created_audit() {
         let port = Arc::new(StubPort::new());
         let service = TaskAppService::new(port.clone());
@@ -242,7 +213,6 @@ mod tests {
             .create_task(CreateTaskInput {
                 session_id: "s-1".to_string(),
                 goal: Some("do".to_string()),
-                limits_json: Some("{\"max_steps\":1}".to_string()),
                 created_by: TaskCreatedBy::Explicit,
             })
             .expect("create task");

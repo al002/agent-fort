@@ -50,7 +50,6 @@
 //!             rebind_token,
 //!             exec_operation("echo hello from af-sdk"),
 //!             Some("exec: echo hello from af-sdk".to_string()),
-//!             None,
 //!         )
 //!         .await?;
 //!     Ok(())
@@ -108,6 +107,13 @@ pub use session::SessionClient;
 pub use task::TaskClient;
 
 /// Raw task operation payload used by task creation APIs.
+///
+/// Valid operation kinds in capability-first mode:
+/// - `exec`
+/// - `fs.read`
+/// - `fs.write`
+/// - `net`
+/// - `tool`
 ///
 /// For shell execution tasks, prefer [`exec_operation`].
 pub use af_rpc_proto::TaskOperation;

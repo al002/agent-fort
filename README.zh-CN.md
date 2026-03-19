@@ -33,31 +33,29 @@ cargo xtask package af-bootstrap --profile debug
 
 - Rust
 - Protobuf（`prost`），由 [Buf](https://buf.build/) 管理
-- 策略引擎：YAML 策略文件 + [cel](https://cel.dev/)
+- 策略引擎：static policy 和会话级的动态 capability 权限
 - 执行隔离：基于 `bwrap`、seccomp、cgroups v2 的 Linux sandbox
 - 存储：SQLite（`rusqlite`）
 - SDK：Rust（已实现），Python/Node.js（规划中）
 
 ## 安全模型
 
-- 请求会先被统一化为结构化数据，再进入策略求值。
-- 策略结果决定允许、拒绝或进入审批流程。
+- 请求会先被统一化并提取为 capabilities，再进入策略求值。
+- 策略结果由 capability 决定（`allow` / `deny` / `ask`）。
 - 实际执行由隔离后端承载（sandbox/container/microvm）。
 - Sandbox 默认行为：
   - 文件系统为 `restricted`（启用平台默认挂载并挂载 `/proc`），挂载当前目录为可读写；
   - 网络禁用
   - 命令超时默认 `60s`
   - stdout/stderr 捕获上限各 `1 MiB`。
+  - cgroup 资源治理默认 `best_effort`（如需强制要求可设置 `AF_RESOURCE_GOVERNANCE_MODE=required`）。
 
 ## 使用
 
 以下是完整的 SDK 内置 bootstrap 流程（与 `af-example-agent-tui` 一致）：
 
 ```rust
-use std::collections::{BTreeMap, HashMap};
-
-use af_sdk::{AgentFortClient, BootstrapConfig, SdkConfig, TaskOperation};
-use prost_types::{value::Kind as ProstValueKind, Struct as ProstStruct, Value as ProstValue};
+use af_sdk::{AgentFortClient, BootstrapConfig, SdkConfig, exec_operation};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -80,31 +78,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let lease = session.lease.expect("session lease is required");
 
-    // TaskOperation 可让 AI 生成，再提交至运行时。
-    let mut payload = BTreeMap::new();
-    payload.insert(
-        "command".to_string(),
-        ProstValue {
-            kind: Some(ProstValueKind::StringValue("echo hello".to_string())),
-        },
-    );
-    let operation = TaskOperation {
-        kind: "exec".to_string(),
-        payload: Some(ProstStruct { fields: payload }),
-        options: None,
-        labels: HashMap::new(),
-    };
-
     let result = {
         let mut tasks = client.tasks().await?;
         tasks
             .create(
                 session.session_id.clone(),
                 lease.rebind_token.clone(),
-                operation,
+                exec_operation("echo hello"),
                 Some("demo task".to_string()),
-                // 保持网络可用，并挂载 /etc 与 /mnt 以提供 DNS 相关配置文件。
-                Some(r#"{"sandbox":{"network":"full","mounts":[{"source":"/etc","target":"/etc","read_only":true},{"source":"/mnt","target":"/mnt","read_only":true}]}}"#.to_string()),
             )
             .await?
     };
@@ -135,56 +116,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Policy 配置示例
 
-创建 `policies/default.yaml`：
+创建 `policies/static_policy.yaml`：
 
 ```yaml
 version: 1
-rules:
-  - id: deny-system-file-write
-    kind: deny
-    priority: 1000
-    enabled: true
-    match:
-      operation_kinds: ["exec"]
-    when: "facts.system_file_write == true"
-    effect:
-      decision: deny
-      reason: system file writes are denied
-      runtime_backend: sandbox
-      requirements: []
-
-  - id: ask-network-access
-    kind: approval
-    priority: 900
-    enabled: true
-    match:
-      operation_kinds: ["exec"]
-    when: "facts.network_access == true"
-    effect:
-      decision: ask
-      reason: network access requires approval
-      runtime_backend: sandbox
-      requirements: []
-      approval:
-        summary: network access requires approval
-        details: reply yes/no in the agent-tui to continue
-        items:
-          - kind: network
-            summary: outbound network access
-
-  - id: allow-default-exec
-    kind: allow
-    priority: 100
-    enabled: true
-    match:
-      operation_kinds: ["exec"]
-    when: "true"
-    effect:
-      decision: allow
-      reason: allow default command execution
-      runtime_backend: sandbox
-      requirements: []
+revision: 1
+default_action: deny
+capabilities:
+  fs_read: ["/home/**", "/tmp/**", "/etc/ssl/**"]
+  fs_write: ["/home/**", "/tmp/**"]
+  fs_delete: ["/home/**", "/tmp/**"]
+  net_connect:
+    - host: "example.com"
+      port: 443
+      protocol: "https"
+  allow_host_exec: false
+  allow_process_control: false
+  allow_privilege: false
+  allow_credential_access: false
+backends:
+  backend_order: ["sandbox"]
+  capability_matrix:
+    sandbox:
+      fs_read: ["/home/**", "/tmp/**", "/etc/ssl/**"]
+      fs_write: ["/home/**", "/tmp/**"]
+      fs_delete: ["/home/**", "/tmp/**"]
+      net_connect:
+        - host: "example.com"
+          port: 443
+          protocol: "https"
+      allow_host_exec: false
+      allow_process_control: false
+      allow_privilege: false
+      allow_credential_access: false
+  profiles:
+    sandbox:
+      type: sandbox
+      profile_id: "sandbox-default"
+      network_default: "deny"
+      writable_roots: ["/home/**", "/tmp/**"]
+      readonly_roots: ["/etc/ssl/**"]
+      syscall_policy: "baseline"
+      limits: { cpu_ms: 120000, memory_mb: 1024, pids: 128, disk_mb: 1024, timeout_ms: 60000 }
 ```
+
+Task operation kind 仅支持：`exec`、`fs.read`、`fs.write`、`net`、`tool`。
 
 ## 测试
 
@@ -243,7 +219,7 @@ cargo xtask package af-bootstrap --profile debug
 已完成:
 - [x] Rust SDK（`af-sdk`）
 - [x] 本地 daemon 启动与资产准备（`af-bootstrap`）
-- [x] 基于目录的策略加载（`YAML`）+ CEL 求值 + 热更新
+- [x] capability-first 静态策略加载（`static_policy.yaml`）+ 热更新
 - [x] 人工审批闭环（approval workflow）
 - [x] Linux 优先路径下的 sandbox 命令执行
 - [x] 端到端示例应用（`af-example-agent-tui`）

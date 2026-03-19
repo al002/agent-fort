@@ -2,12 +2,14 @@ use std::sync::mpsc;
 use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
 
+use af_policy::StaticPolicyDocument;
 use tracing::{info, warn};
 
 use crate::debounce::merge_debounced;
+use crate::yaml_parser::LoadedStaticPolicy;
 use crate::{
-    CelCompiler, CompiledPolicies, PolicyDirectoryLoader, PolicyDirectoryWatcher, PolicyInfraError,
-    PolicyInfraResult, PolicyReloadError, PolicyRuntimeConfig, PolicyStatus, YamlParser,
+    PolicyDirectoryLoader, PolicyDirectoryWatcher, PolicyInfraError, PolicyInfraResult,
+    PolicyReloadError, PolicyRuntimeConfig, PolicyStatus, YamlParser,
 };
 
 pub struct PolicyRuntime {
@@ -17,9 +19,16 @@ pub struct PolicyRuntime {
     worker: Option<JoinHandle<()>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ActiveStaticPolicy {
+    pub revision: u64,
+    pub file_count: usize,
+    pub document: Arc<StaticPolicyDocument>,
+}
+
 #[derive(Debug)]
 struct RuntimeState {
-    active: Arc<CompiledPolicies>,
+    active: ActiveStaticPolicy,
     last_reload_error: Option<PolicyReloadError>,
 }
 
@@ -35,9 +44,9 @@ impl std::fmt::Debug for PolicyRuntime {
 
 impl PolicyRuntime {
     pub fn start(config: PolicyRuntimeConfig) -> PolicyInfraResult<Self> {
-        let initial = load_and_compile(&config, 1)?;
+        let initial = load_static_policy(&config, 1)?;
         let state = Arc::new(RwLock::new(RuntimeState {
-            active: Arc::new(initial),
+            active: initial,
             last_reload_error: None,
         }));
 
@@ -61,16 +70,16 @@ impl PolicyRuntime {
         &self.config
     }
 
-    pub fn compiled(&self) -> PolicyInfraResult<Arc<CompiledPolicies>> {
-        Ok(Arc::clone(&self.read_state()?.active))
+    pub fn active_static_policy(&self) -> PolicyInfraResult<ActiveStaticPolicy> {
+        Ok(self.read_state()?.active.clone())
     }
 
     pub fn status(&self) -> PolicyInfraResult<PolicyStatus> {
         let state = self.read_state()?;
         Ok(PolicyStatus {
             revision: state.active.revision,
-            file_count: state.active.file_count(),
-            rule_count: state.active.rule_count(),
+            file_count: state.active.file_count,
+            static_policy_revision: state.active.document.revision,
             last_reload_error: state.last_reload_error.clone(),
         })
     }
@@ -121,7 +130,7 @@ fn run_reload_worker(
             }
         };
 
-        let next_revision = match state.read() {
+        let next_runtime_revision = match state.read() {
             Ok(guard) => guard.active.revision + 1,
             Err(_) => {
                 warn!("policy runtime state poisoned before reload");
@@ -129,13 +138,13 @@ fn run_reload_worker(
             }
         };
 
-        match load_and_compile(&config, next_revision) {
-            Ok(compiled) => {
-                let file_count = compiled.file_count();
-                let rule_count = compiled.rule_count();
+        match load_static_policy(&config, next_runtime_revision) {
+            Ok(active) => {
+                let static_policy_revision = active.document.revision;
+                let file_count = active.file_count;
                 match state.write() {
                     Ok(mut guard) => {
-                        guard.active = Arc::new(compiled);
+                        guard.active = active;
                         guard.last_reload_error = None;
                     }
                     Err(_) => {
@@ -144,21 +153,21 @@ fn run_reload_worker(
                     }
                 }
                 info!(
-                    revision = next_revision,
+                    runtime_revision = next_runtime_revision,
+                    static_policy_revision,
                     file_count,
-                    rule_count,
                     changed_paths = ?merged.paths,
                     "policy reload applied"
                 );
             }
             Err(error) => {
                 warn!(
-                    revision = next_revision,
+                    runtime_revision = next_runtime_revision,
                     changed_paths = ?merged.paths,
                     error = %error,
                     "policy reload rejected; keeping previous snapshot"
                 );
-                record_reload_error(&state, Some(next_revision), error.to_string());
+                record_reload_error(&state, Some(next_runtime_revision), error.to_string());
             }
         }
     }
@@ -186,13 +195,18 @@ fn record_reload_error(
     }
 }
 
-fn load_and_compile(
+fn load_static_policy(
     config: &PolicyRuntimeConfig,
-    revision: u64,
-) -> PolicyInfraResult<CompiledPolicies> {
-    let snapshot = PolicyDirectoryLoader::new(config.root.clone()).load()?;
-    let loaded = YamlParser.parse(snapshot)?;
-    CelCompiler.compile(loaded, revision)
+    runtime_revision: u64,
+) -> PolicyInfraResult<ActiveStaticPolicy> {
+    let loaded: LoadedStaticPolicy =
+        YamlParser.parse_static_policy(PolicyDirectoryLoader::new(config.root.clone()).load()?)?;
+
+    Ok(ActiveStaticPolicy {
+        revision: runtime_revision,
+        file_count: loaded.snapshot.file_count(),
+        document: Arc::new(loaded.document),
+    })
 }
 
 #[cfg(test)]
@@ -205,23 +219,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn loads_initial_compiled_snapshot_before_starting_reload_worker() {
+    fn loads_initial_static_policy_before_starting_reload_worker() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let root = temp_dir.path().join("policies");
         fs::create_dir_all(&root).expect("create policy dir");
-        fs::write(
-            root.join("base.yaml"),
-            r#"
-version: 1
-rules:
-  - id: allow-base
-    kind: allow
-    when: true
-    effect:
-      decision: allow
-"#,
-        )
-        .expect("write base policy");
+        fs::write(root.join("static_policy.yaml"), policy_yaml(1)).expect("write policy");
 
         let runtime = PolicyRuntime::start(
             PolicyRuntimeConfig::new(&root)
@@ -230,29 +232,20 @@ rules:
         )
         .expect("start runtime");
 
-        let compiled = runtime.compiled().expect("read compiled set");
-        assert_eq!(compiled.revision, 1);
-        assert_eq!(compiled.rule_count(), 1);
+        let active = runtime
+            .active_static_policy()
+            .expect("read active policy snapshot");
+        assert_eq!(active.revision, 1);
+        assert_eq!(active.document.revision, 1);
+        assert_eq!(active.file_count, 1);
     }
 
     #[test]
-    fn hot_reload_applies_create_update_and_delete_changes() {
+    fn hot_reload_applies_policy_updates_atomically() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let root = temp_dir.path().join("policies");
         fs::create_dir_all(&root).expect("create policy dir");
-        fs::write(
-            root.join("base.yaml"),
-            r#"
-version: 1
-rules:
-  - id: allow-base
-    kind: allow
-    when: true
-    effect:
-      decision: allow
-"#,
-        )
-        .expect("write base policy");
+        fs::write(root.join("static_policy.yaml"), policy_yaml(1)).expect("write policy");
 
         let runtime = PolicyRuntime::start(
             PolicyRuntimeConfig::new(&root)
@@ -261,40 +254,12 @@ rules:
         )
         .expect("start runtime");
 
-        fs::write(
-            root.join("extra.yaml"),
-            r#"
-version: 1
-rules:
-  - id: ask-network
-    kind: approval
-    when: facts.requires_network
-    effect:
-      decision: ask
-"#,
-        )
-        .expect("create extra policy");
-        wait_until_revision(&runtime, 2);
-        assert_eq!(runtime.status().expect("status").rule_count, 2);
+        fs::write(root.join("static_policy.yaml"), policy_yaml(2)).expect("update policy");
+        wait_until_runtime_revision(&runtime, 2);
 
-        fs::write(
-            root.join("base.yaml"),
-            r#"
-version: 1
-rules:
-  - id: allow-base
-    kind: allow
-    when: false
-    effect:
-      decision: deny
-"#,
-        )
-        .expect("update base policy");
-        wait_until_revision(&runtime, 3);
-
-        fs::remove_file(root.join("extra.yaml")).expect("delete extra policy");
-        wait_until_revision(&runtime, 4);
-        assert_eq!(runtime.status().expect("status").rule_count, 1);
+        let active = runtime.active_static_policy().expect("read active policy");
+        assert_eq!(active.revision, 2);
+        assert_eq!(active.document.revision, 2);
     }
 
     #[test]
@@ -302,19 +267,7 @@ rules:
         let temp_dir = TempDir::new().expect("create temp dir");
         let root = temp_dir.path().join("policies");
         fs::create_dir_all(&root).expect("create policy dir");
-        fs::write(
-            root.join("base.yaml"),
-            r#"
-version: 1
-rules:
-  - id: allow-base
-    kind: allow
-    when: true
-    effect:
-      decision: allow
-"#,
-        )
-        .expect("write base policy");
+        fs::write(root.join("static_policy.yaml"), policy_yaml(1)).expect("write policy");
 
         let runtime = PolicyRuntime::start(
             PolicyRuntimeConfig::new(&root)
@@ -324,39 +277,28 @@ rules:
         .expect("start runtime");
 
         fs::write(
-            root.join("base.yaml"),
-            r#"
-version: 1
-rules:
-  - id: allow-base
-    kind: allow
-    when: facts.
-    effect:
-      decision: allow
-"#,
+            root.join("static_policy.yaml"),
+            "version: 1\nrevision: bad\ndefault_action: deny\n",
         )
         .expect("write invalid policy");
 
         wait_until_error(&runtime);
-        let status = runtime.status().expect("status");
-        assert_eq!(status.revision, 1);
-        assert_eq!(status.rule_count, 1);
-        assert!(status.last_reload_error.is_some());
+        let active = runtime.active_static_policy().expect("active policy");
+        assert_eq!(active.document.revision, 1);
+        assert_eq!(active.revision, 1);
     }
 
-    fn wait_until_revision(runtime: &PolicyRuntime, expected_revision: u64) {
+    fn wait_until_runtime_revision(runtime: &PolicyRuntime, target_revision: u64) {
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
-            let status = runtime.status().expect("status");
-            if status.revision >= expected_revision {
+            let status = runtime.status().expect("runtime status");
+            if status.revision >= target_revision {
                 return;
             }
-            if Instant::now() >= deadline {
-                panic!(
-                    "timed out waiting for policy revision {expected_revision}, current {:?}",
-                    status
-                );
-            }
+            assert!(
+                Instant::now() < deadline,
+                "timeout waiting policy runtime reload"
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
     }
@@ -364,14 +306,60 @@ rules:
     fn wait_until_error(runtime: &PolicyRuntime) {
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
-            let status = runtime.status().expect("status");
+            let status = runtime.status().expect("runtime status");
             if status.last_reload_error.is_some() {
                 return;
             }
-            if Instant::now() >= deadline {
-                panic!("timed out waiting for reload error, current {:?}", status);
-            }
+            assert!(
+                Instant::now() < deadline,
+                "timeout waiting policy runtime error"
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    fn policy_yaml(revision: u64) -> String {
+        format!(
+            r#"
+version: 1
+revision: {revision}
+default_action: deny
+capabilities:
+  fs_read: ["/work/**"]
+  fs_write: ["/work/**"]
+  fs_delete: ["/work/**"]
+  net_connect: []
+  allow_host_exec: false
+  allow_process_control: false
+  allow_privilege: false
+  allow_credential_access: false
+backends:
+  backend_order: ["sandbox"]
+  capability_matrix:
+    sandbox:
+      fs_read: ["/work/**"]
+      fs_write: ["/work/**"]
+      fs_delete: ["/work/**"]
+      net_connect: []
+      allow_host_exec: false
+      allow_process_control: false
+      allow_privilege: false
+      allow_credential_access: false
+  profiles:
+    sandbox:
+      type: sandbox
+      profile_id: "sandbox-default"
+      network_default: "deny"
+      writable_roots: ["/work/**"]
+      readonly_roots: ["/usr/**"]
+      syscall_policy: "baseline"
+      limits:
+        cpu_ms: 1000
+        memory_mb: 128
+        pids: 64
+        disk_mb: 256
+        timeout_ms: 60000
+"#
+        )
     }
 }

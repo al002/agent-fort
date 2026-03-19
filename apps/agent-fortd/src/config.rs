@@ -2,6 +2,7 @@ use std::env;
 use std::path::PathBuf;
 
 use af_rpc_transport::Endpoint;
+use af_sandbox::ResourceGovernanceMode;
 use anyhow::{Context, Result};
 use uuid::Uuid;
 
@@ -12,6 +13,7 @@ const ENV_BWRAP_PATH: &str = "AF_BWRAP_PATH";
 const ENV_CGROUP_ROOT: &str = "AF_CGROUP_ROOT";
 const ENV_STORE_PATH: &str = "AF_STORE_PATH";
 const ENV_POLICY_DIR: &str = "AF_POLICY_DIR";
+const ENV_RESOURCE_GOVERNANCE_MODE: &str = "AF_RESOURCE_GOVERNANCE_MODE";
 const DEFAULT_DAEMON_ENDPOINT: &str = "/tmp/agent-fortd.sock";
 const DEFAULT_BWRAP_PATH: &str = "/usr/bin/bwrap";
 #[cfg(windows)]
@@ -28,6 +30,7 @@ pub struct DaemonConfig {
     pub cgroup_root: PathBuf,
     pub store_path: PathBuf,
     pub policy_dir: PathBuf,
+    pub resource_governance_mode: ResourceGovernanceMode,
 }
 
 impl DaemonConfig {
@@ -56,6 +59,10 @@ impl DaemonConfig {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| default_policy_dir()),
         )?;
+        let resource_governance_mode = env::var(ENV_RESOURCE_GOVERNANCE_MODE)
+            .ok()
+            .and_then(|raw| parse_resource_governance_mode(raw.as_str()))
+            .unwrap_or(ResourceGovernanceMode::BestEffort);
 
         Ok(Self {
             endpoint,
@@ -65,6 +72,7 @@ impl DaemonConfig {
             cgroup_root,
             store_path,
             policy_dir,
+            resource_governance_mode,
         })
     }
 }
@@ -102,6 +110,16 @@ fn resolve_policy_dir(path: PathBuf) -> Result<PathBuf> {
         Ok(path) => Ok(path),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(absolute),
         Err(error) => Err(error.into()),
+    }
+}
+
+fn parse_resource_governance_mode(raw: &str) -> Option<ResourceGovernanceMode> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "required" => Some(ResourceGovernanceMode::Required),
+        "best_effort" | "best-effort" => Some(ResourceGovernanceMode::BestEffort),
+        "disabled" => Some(ResourceGovernanceMode::Disabled),
+        _ => None,
     }
 }
 

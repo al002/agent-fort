@@ -3,6 +3,7 @@ mod migrations;
 mod repo_approval;
 mod repo_approval_tx;
 mod repo_audit;
+mod repo_capability_grant;
 mod repo_session;
 mod repo_session_tx;
 mod repo_task;
@@ -21,6 +22,7 @@ use rusqlite::{Connection, Error as SqliteError, ErrorCode};
 use thiserror::Error;
 
 pub use migrations::{LATEST_SCHEMA_VERSION, MigrationReport};
+pub use repo_capability_grant::{CapabilityGrantEventRecord, CapabilityGrantRecord};
 
 pub type StoreResult<T> = Result<T, StoreError>;
 

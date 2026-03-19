@@ -40,7 +40,7 @@ impl BootstrappedDaemon {
             policy_dir = %config.policy_dir.display(),
             policy_revision = policy_status.revision,
             policy_files = policy_status.file_count,
-            policy_rules = policy_status.rule_count,
+            static_policy_revision = policy_status.static_policy_revision,
             "policy directory runtime ready"
         );
 
@@ -57,6 +57,7 @@ impl BootstrappedDaemon {
             policy_runtime,
             config.policy_dir.clone(),
             workspace_root,
+            config.resource_governance_mode,
         );
         let daemon_info = controller.daemon_info();
         info!(
@@ -76,6 +77,7 @@ impl BootstrappedDaemon {
             store_path = %self.config.store_path.display(),
             helper_path = %self.config.helper_path.display(),
             bwrap_path = %self.config.bwrap_path.display(),
+            resource_governance_mode = ?self.config.resource_governance_mode,
             policy_dir = %self.config.policy_dir.display(),
             "agent-fortd started"
         );

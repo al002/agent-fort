@@ -1,35 +1,59 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+use serde_json::Value;
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct NormalizedOperation {
-    pub intent: Intent,
-    pub facts: Facts,
+    pub kind: OperationKind,
+    pub payload: Value,
+    pub options: Value,
+    pub labels: BTreeMap<String, String>,
+    pub command: Option<NormalizedCommand>,
+    pub cwd: Option<PathBuf>,
+    pub env: BTreeMap<String, String>,
+    pub paths: Vec<PathBuf>,
+    pub hosts: Vec<String>,
+    pub reason_codes: Vec<String>,
+    pub unknown: bool,
     pub runtime: RuntimeContext,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Intent {
-    pub kind: OperationKind,
-    pub labels: BTreeMap<String, String>,
-    pub tags: BTreeSet<String>,
-    pub targets: Vec<Target>,
-}
-
-impl Intent {
+impl NormalizedOperation {
     pub fn operation_kind(&self) -> &'static str {
         self.kind.as_str()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NormalizedCommand {
+    Shell(String),
+    Argv(Vec<String>),
+}
+
+impl NormalizedCommand {
+    pub fn as_shell_text(&self) -> Option<&str> {
+        match self {
+            Self::Shell(command) => Some(command.as_str()),
+            Self::Argv(_) => None,
+        }
+    }
+
+    pub fn argv(&self) -> Option<&[String]> {
+        match self {
+            Self::Argv(argv) => Some(argv.as_slice()),
+            Self::Shell(_) => None,
+        }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationKind {
     Exec,
-    FileRead,
-    FileWrite,
-    FilePatch,
-    Fetch,
-    ToolCall,
+    FsRead,
+    FsWrite,
+    Net,
+    Tool,
     Unknown,
 }
 
@@ -37,11 +61,10 @@ impl OperationKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Exec => "exec",
-            Self::FileRead => "file.read",
-            Self::FileWrite => "file.write",
-            Self::FilePatch => "file.patch",
-            Self::Fetch => "fetch",
-            Self::ToolCall => "tool.call",
+            Self::FsRead => "fs.read",
+            Self::FsWrite => "fs.write",
+            Self::Net => "net",
+            Self::Tool => "tool",
             Self::Unknown => "unknown",
         }
     }
@@ -51,56 +74,6 @@ impl std::fmt::Display for OperationKind {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Target {
-    pub kind: TargetKind,
-    pub value: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum TargetKind {
-    Path,
-    Host,
-    Tool,
-    Other,
-}
-
-impl TargetKind {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Path => "path",
-            Self::Host => "host",
-            Self::Tool => "tool",
-            Self::Other => "other",
-        }
-    }
-}
-
-impl std::fmt::Display for TargetKind {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Facts {
-    pub interactive: Fact<bool>,
-    pub safe_file_read: Fact<bool>,
-    pub safe_file_write: Fact<bool>,
-    pub system_file_read: Fact<bool>,
-    pub system_file_write: Fact<bool>,
-    pub network_access: Fact<bool>,
-    pub system_admin: Fact<bool>,
-    pub process_control: Fact<bool>,
-    pub credential_access: Fact<bool>,
-    pub unknown_intent: Fact<bool>,
-    pub touches_policy_dir: Fact<bool>,
-    pub primary_host: Fact<String>,
-    pub command_text: Fact<String>,
-    pub affected_paths: Vec<PathBuf>,
-    pub reason_codes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,31 +109,6 @@ impl std::fmt::Display for RuntimePlatform {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Fact<T> {
-    Known(T),
-    Unknown,
-}
-
-impl<T> Fact<T> {
-    pub fn is_unknown(&self) -> bool {
-        matches!(self, Self::Unknown)
-    }
-
-    pub fn as_ref(&self) -> Fact<&T> {
-        match self {
-            Self::Known(value) => Fact::Known(value),
-            Self::Unknown => Fact::Unknown,
-        }
-    }
-}
-
-impl<T> Default for Fact<T> {
-    fn default() -> Self {
-        Self::Unknown
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,17 +116,10 @@ mod tests {
     #[test]
     fn operation_kind_has_stable_policy_key() {
         assert_eq!(OperationKind::Exec.as_str(), "exec");
-        assert_eq!(OperationKind::FileRead.as_str(), "file.read");
-        assert_eq!(OperationKind::FileWrite.as_str(), "file.write");
-        assert_eq!(OperationKind::FilePatch.as_str(), "file.patch");
-        assert_eq!(OperationKind::Fetch.as_str(), "fetch");
-        assert_eq!(OperationKind::ToolCall.as_str(), "tool.call");
+        assert_eq!(OperationKind::FsRead.as_str(), "fs.read");
+        assert_eq!(OperationKind::FsWrite.as_str(), "fs.write");
+        assert_eq!(OperationKind::Net.as_str(), "net");
+        assert_eq!(OperationKind::Tool.as_str(), "tool");
         assert_eq!(OperationKind::Unknown.as_str(), "unknown");
-    }
-
-    #[test]
-    fn fact_default_is_unknown() {
-        let value = Fact::<bool>::default();
-        assert!(value.is_unknown());
     }
 }

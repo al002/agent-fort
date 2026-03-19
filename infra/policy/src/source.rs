@@ -47,6 +47,6 @@ pub struct PolicyReloadError {
 pub struct PolicyStatus {
     pub revision: u64,
     pub file_count: usize,
-    pub rule_count: usize,
+    pub static_policy_revision: u64,
     pub last_reload_error: Option<PolicyReloadError>,
 }

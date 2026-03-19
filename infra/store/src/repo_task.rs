@@ -78,9 +78,9 @@ fn insert_task(connection: &mut Connection, command: NewTask) -> StoreResult<Tas
     connection
         .execute(
             "INSERT INTO tasks (
-               task_id, session_id, status, goal, created_by, trace_id, limits_json,
+               task_id, session_id, status, goal, created_by, trace_id,
                current_step, error_code, error_message, created_at_ms, updated_at_ms, ended_at_ms
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, NULL, ?9, ?10, NULL)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, NULL, ?8, ?9, NULL)",
             params![
                 command.task_id,
                 command.session_id,
@@ -88,7 +88,6 @@ fn insert_task(connection: &mut Connection, command: NewTask) -> StoreResult<Tas
                 command.goal,
                 task_created_by_to_db(command.created_by),
                 command.trace_id,
-                command.limits_json,
                 i64::from(command.current_step),
                 to_i64(command.created_at_ms, "created_at_ms")?,
                 to_i64(command.updated_at_ms, "updated_at_ms")?,
@@ -111,7 +110,7 @@ fn list_tasks(
         match (after_created_at_ms, after_task_id) {
             (Some(after_created_at_ms), Some(after_task_id)) => (
                 "SELECT
-               task_id, session_id, status, goal, created_by, trace_id, limits_json,
+               task_id, session_id, status, goal, created_by, trace_id,
                current_step, error_code, error_message, created_at_ms, updated_at_ms, ended_at_ms
              FROM tasks
              WHERE session_id = ?1
@@ -127,7 +126,7 @@ fn list_tasks(
             ),
             _ => (
                 "SELECT
-               task_id, session_id, status, goal, created_by, trace_id, limits_json,
+               task_id, session_id, status, goal, created_by, trace_id,
                current_step, error_code, error_message, created_at_ms, updated_at_ms, ended_at_ms
              FROM tasks
              WHERE session_id = ?1
@@ -239,7 +238,7 @@ pub(crate) fn load_task(
     let raw = connection
         .query_row(
             "SELECT
-               task_id, session_id, status, goal, created_by, trace_id, limits_json,
+               task_id, session_id, status, goal, created_by, trace_id,
                current_step, error_code, error_message, created_at_ms, updated_at_ms, ended_at_ms
              FROM tasks
              WHERE session_id = ?1 AND task_id = ?2",
@@ -281,7 +280,6 @@ struct RawTask {
     goal: Option<String>,
     created_by: String,
     trace_id: String,
-    limits_json: Option<String>,
     current_step: i64,
     error_code: Option<String>,
     error_message: Option<String>,
@@ -299,7 +297,6 @@ impl RawTask {
             goal: self.goal,
             created_by: task_created_by_from_db(&self.created_by)?,
             trace_id: self.trace_id,
-            limits_json: self.limits_json,
             current_step: u32::try_from(self.current_step).map_err(|_| {
                 StoreError::Internal(format!("invalid current_step in db: {}", self.current_step))
             })?,
@@ -323,13 +320,12 @@ fn row_to_raw_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawTask> {
         goal: row.get(3)?,
         created_by: row.get(4)?,
         trace_id: row.get(5)?,
-        limits_json: row.get(6)?,
-        current_step: row.get(7)?,
-        error_code: row.get(8)?,
-        error_message: row.get(9)?,
-        created_at_ms: row.get(10)?,
-        updated_at_ms: row.get(11)?,
-        ended_at_ms: row.get(12)?,
+        current_step: row.get(6)?,
+        error_code: row.get(7)?,
+        error_message: row.get(8)?,
+        created_at_ms: row.get(9)?,
+        updated_at_ms: row.get(10)?,
+        ended_at_ms: row.get(11)?,
     })
 }
 

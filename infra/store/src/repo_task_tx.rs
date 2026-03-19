@@ -135,9 +135,9 @@ fn cancel_with_audit(
 fn insert_task(tx: &Transaction<'_>, write: &CreateTaskWrite) -> Result<(), TaskAppError> {
     tx.execute(
         "INSERT INTO tasks (
-           task_id, session_id, status, goal, created_by, trace_id, limits_json,
+           task_id, session_id, status, goal, created_by, trace_id,
            current_step, error_code, error_message, created_at_ms, updated_at_ms, ended_at_ms
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, NULL, ?9, ?10, NULL)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, NULL, ?8, ?9, NULL)",
         params![
             &write.task.task_id,
             &write.task.session_id,
@@ -145,7 +145,6 @@ fn insert_task(tx: &Transaction<'_>, write: &CreateTaskWrite) -> Result<(), Task
             &write.task.goal,
             task_created_by_to_db(write.task.created_by),
             &write.task.trace_id,
-            &write.task.limits_json,
             i64::from(write.task.current_step),
             to_i64(write.task.created_at_ms, "created_at_ms").map_err(store_err)?,
             to_i64(write.task.updated_at_ms, "updated_at_ms").map_err(store_err)?,

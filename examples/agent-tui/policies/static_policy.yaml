@@ -1,0 +1,80 @@
+version: 1
+revision: 2
+default_action: deny
+capabilities:
+  fs_read:
+    - "/home/**"
+    - "/tmp/**"
+    - "/etc/**"
+    - "/run/**"
+    - "/mnt/wsl/**"
+  fs_write:
+    - "/home/**"
+    - "/tmp/**"
+  fs_delete:
+    - "/home/**"
+    - "/tmp/**"
+  net_connect:
+    - host: "example.com"
+      port: 443
+      protocol: "https"
+    - host: "api.openai.com"
+      port: 443
+      protocol: "https"
+    - host: ".baidu.com"
+      port: 443
+      protocol: "https"
+  allow_host_exec: false
+  allow_process_control: false
+  allow_privilege: false
+  allow_credential_access: false
+backends:
+  backend_order:
+    - sandbox
+  capability_matrix:
+    sandbox:
+      fs_read:
+        - "/home/**"
+        - "/tmp/**"
+        - "/etc/**"
+        - "/run/**"
+        - "/mnt/wsl/**"
+      fs_write:
+        - "/home/**"
+        - "/tmp/**"
+      fs_delete:
+        - "/home/**"
+        - "/tmp/**"
+      net_connect:
+        - host: "example.com"
+          port: 443
+          protocol: "https"
+        - host: "api.openai.com"
+          port: 443
+          protocol: "https"
+        - host: ".baidu.com"
+          port: 443
+          protocol: "https"
+      allow_host_exec: false
+      allow_process_control: false
+      allow_privilege: false
+      allow_credential_access: false
+  profiles:
+    sandbox:
+      type: sandbox
+      profile_id: "sandbox-default"
+      network_default: "full"
+      writable_roots:
+        - "/home/**"
+        - "/tmp/**"
+      readonly_roots:
+        - "/etc/**"
+        - "/run/**"
+        - "/mnt/wsl/**"
+      syscall_policy: "baseline"
+      limits:
+        cpu_ms: 120000
+        memory_mb: 1024
+        pids: 128
+        disk_mb: 1024
+        timeout_ms: 60000

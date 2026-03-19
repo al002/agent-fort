@@ -73,7 +73,6 @@ fn task_repository_round_trip() {
             goal: Some("build repo".to_string()),
             created_by: TaskCreatedBy::Explicit,
             trace_id: "trace-1".to_string(),
-            limits_json: Some("{\"max_steps\":10}".to_string()),
             current_step: 0,
             created_at_ms: 1_000,
             updated_at_ms: 1_000,
@@ -343,7 +342,6 @@ fn task_service_writes_task_and_audit_atomically() {
         .create_task(CreateTaskInput {
             session_id: "session-1".to_string(),
             goal: Some("ship".to_string()),
-            limits_json: Some("{\"max_steps\":1}".to_string()),
             created_by: TaskCreatedBy::Explicit,
         })
         .expect("create task");
@@ -476,7 +474,6 @@ fn create_base_task(store: &Store, session_id: &str, task_id: &str, trace_id: &s
             goal: None,
             created_by: TaskCreatedBy::Explicit,
             trace_id: trace_id.to_string(),
-            limits_json: None,
             current_step: 0,
             created_at_ms: 1_000,
             updated_at_ms: 1_000,

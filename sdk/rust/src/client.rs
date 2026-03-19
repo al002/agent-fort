@@ -317,7 +317,6 @@ impl AgentFortClient {
     ///             rebind_token,
     ///             exec_operation("echo hello"),
     ///             Some("exec: echo hello".to_string()),
-    ///             None,
     ///         )
     ///         .await?;
     ///     Ok(())

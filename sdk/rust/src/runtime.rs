@@ -162,6 +162,17 @@ impl RuntimeClient {
 
     /// Creates a task under an existing session.
     ///
+    /// Valid operation kinds in capability-first mode:
+    /// - `exec`
+    /// - `fs.read`
+    /// - `fs.write`
+    /// - `net`
+    /// - `tool`
+    ///
+    /// Runtime/backend override fields are rejected by daemon validation.
+    /// Avoid `sandbox`, `runtime_backend`, `backend`, `mounts`, and similar keys
+    /// in operation payload/options/labels.
+    ///
     /// # Errors
     /// Returns transport, RPC, or protocol decode errors.
     pub async fn create_task(
@@ -170,14 +181,12 @@ impl RuntimeClient {
         rebind_token: String,
         operation: TaskOperation,
         goal: Option<String>,
-        limits_json: Option<String>,
     ) -> Result<CreateTaskResponse> {
         let request = CreateTaskRequest {
             session_id,
             client_instance_id: self.client_instance_id.clone(),
             rebind_token,
             goal,
-            limits_json,
             operation: Some(operation),
         };
         let payload = self

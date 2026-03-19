@@ -1,73 +1,98 @@
-use std::collections::BTreeMap;
 use std::fs;
 
-use af_policy::{LoadedPolicies, LoadedRule, PolicyDirectorySnapshot, PolicyDocument, RuleSource};
+use af_policy::{BackendProfile, PolicyDirectorySnapshot, RuntimeBackend, StaticPolicyDocument};
 
 use crate::{PolicyInfraError, PolicyInfraResult};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedStaticPolicy {
+    pub snapshot: PolicyDirectorySnapshot,
+    pub document: StaticPolicyDocument,
+}
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct YamlParser;
 
 impl YamlParser {
-    pub fn parse(&self, snapshot: PolicyDirectorySnapshot) -> PolicyInfraResult<LoadedPolicies> {
-        let mut rules = Vec::new();
-        let mut seen_rule_ids = BTreeMap::<String, String>::new();
+    pub fn parse_static_policy(
+        &self,
+        snapshot: PolicyDirectorySnapshot,
+    ) -> PolicyInfraResult<LoadedStaticPolicy> {
+        let policy_file = snapshot
+            .files
+            .iter()
+            .find(|file| {
+                file.relative_path
+                    .eq_ignore_ascii_case("static_policy.yaml")
+                    || file.relative_path.eq_ignore_ascii_case("static_policy.yml")
+            })
+            .ok_or_else(|| PolicyInfraError::StaticPolicyMissing {
+                root: snapshot.root.clone(),
+            })?;
 
-        for file in &snapshot.files {
-            let raw = fs::read_to_string(&file.absolute_path)?;
-            let document: PolicyDocument =
-                serde_yaml::from_str(&raw).map_err(|error| PolicyInfraError::YamlParse {
-                    path: file.relative_path.clone(),
-                    message: error.to_string(),
-                })?;
+        let raw = fs::read_to_string(&policy_file.absolute_path)?;
+        let document: StaticPolicyDocument =
+            serde_yaml::from_str(&raw).map_err(|error| PolicyInfraError::YamlParse {
+                path: policy_file.relative_path.clone(),
+                message: error.to_string(),
+            })?;
 
-            if document.version != 1 {
-                return Err(PolicyInfraError::InvalidDocument {
-                    path: file.relative_path.clone(),
-                    message: format!("unsupported policy document version: {}", document.version),
-                });
-            }
+        validate_static_policy(&document, &policy_file.relative_path)?;
 
-            for (rule_index, rule) in document.rules.into_iter().enumerate() {
-                validate_rule(&file.relative_path, &rule.id, &rule.when)?;
-
-                if let Some(first_path) =
-                    seen_rule_ids.insert(rule.id.clone(), file.relative_path.clone())
-                {
-                    return Err(PolicyInfraError::DuplicateRuleId {
-                        rule_id: rule.id,
-                        first_path,
-                        second_path: file.relative_path.clone(),
-                    });
-                }
-
-                rules.push(LoadedRule {
-                    source: RuleSource {
-                        relative_path: file.relative_path.clone(),
-                        rule_index,
-                    },
-                    rule,
-                });
-            }
-        }
-
-        Ok(LoadedPolicies { snapshot, rules })
+        Ok(LoadedStaticPolicy { snapshot, document })
     }
 }
 
-fn validate_rule(path: &str, rule_id: &str, when: &str) -> PolicyInfraResult<()> {
-    if rule_id.trim().is_empty() {
+fn validate_static_policy(document: &StaticPolicyDocument, path: &str) -> PolicyInfraResult<()> {
+    if document.version != 1 {
         return Err(PolicyInfraError::InvalidDocument {
             path: path.to_string(),
-            message: "rule id must not be empty".to_string(),
+            message: format!("unsupported static policy version: {}", document.version),
         });
     }
-    if when.trim().is_empty() {
-        return Err(PolicyInfraError::InvalidDocument {
-            path: path.to_string(),
-            message: format!("rule `{rule_id}` has empty when expression"),
-        });
+
+    for backend in &document.backends.backend_order {
+        if !document.backends.capability_matrix.contains_key(backend) {
+            return Err(PolicyInfraError::InvalidDocument {
+                path: path.to_string(),
+                message: format!(
+                    "backend `{}` missing capability_matrix entry",
+                    backend.as_str()
+                ),
+            });
+        }
+        if !document.backends.profiles.contains_key(backend) {
+            return Err(PolicyInfraError::InvalidDocument {
+                path: path.to_string(),
+                message: format!("backend `{}` missing profile entry", backend.as_str()),
+            });
+        }
     }
+
+    for (backend, profile) in &document.backends.profiles {
+        if !document.backends.capability_matrix.contains_key(backend) {
+            return Err(PolicyInfraError::InvalidDocument {
+                path: path.to_string(),
+                message: format!(
+                    "profile backend `{}` missing capability_matrix entry",
+                    backend.as_str()
+                ),
+            });
+        }
+        let type_matches = matches!(
+            (backend, profile),
+            (RuntimeBackend::Sandbox, BackendProfile::Sandbox(_))
+                | (RuntimeBackend::Container, BackendProfile::Container(_))
+                | (RuntimeBackend::Microvm, BackendProfile::Microvm(_))
+        );
+        if !type_matches {
+            return Err(PolicyInfraError::InvalidDocument {
+                path: path.to_string(),
+                message: format!("profile type mismatch for backend `{}`", backend.as_str()),
+            });
+        }
+    }
+
     Ok(())
 }
 
@@ -82,78 +107,85 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_policy_rules_in_snapshot_order() {
+    fn parses_static_policy_file() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let root = temp_dir.path().join("policies");
-        fs::create_dir_all(root.join("nested")).expect("create dirs");
-        fs::write(
-            root.join("a.yaml"),
-            r#"
-version: 1
-rules:
-  - id: allow-a
-    kind: allow
-    when: true
-    effect:
-      decision: allow
-"#,
-        )
-        .expect("write first policy file");
-        fs::write(
-            root.join("nested/b.yaml"),
-            r#"
-version: 1
-rules:
-  - id: allow-b
-    kind: allow
-    when: false
-    effect:
-      decision: deny
-"#,
-        )
-        .expect("write second policy file");
+        fs::create_dir_all(&root).expect("create policy dir");
+        fs::write(root.join("static_policy.yaml"), valid_static_policy_yaml())
+            .expect("write static policy");
 
         let snapshot = PolicyDirectoryLoader::new(&root)
             .load()
             .expect("load directory snapshot");
-        let loaded = YamlParser.parse(snapshot).expect("parse policy documents");
+        let loaded = YamlParser
+            .parse_static_policy(snapshot)
+            .expect("parse static policy");
 
-        let ids = loaded
-            .rules
-            .iter()
-            .map(|loaded_rule| loaded_rule.rule.id.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(ids, vec!["allow-a", "allow-b"]);
+        assert_eq!(loaded.document.version, 1);
+        assert_eq!(loaded.document.revision, 9);
+        assert_eq!(loaded.snapshot.file_count(), 1);
     }
 
     #[test]
-    fn rejects_duplicate_rule_ids_across_files() {
+    fn rejects_missing_static_policy_file() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let root = temp_dir.path().join("policies");
         fs::create_dir_all(&root).expect("create policy dir");
-
-        for file_name in ["a.yaml", "b.yaml"] {
-            fs::write(
-                root.join(file_name),
-                r#"
-version: 1
-rules:
-  - id: duplicate
-    kind: allow
-    when: true
-    effect:
-      decision: allow
-"#,
-            )
-            .expect("write duplicate rule file");
-        }
+        fs::write(root.join("extra.yaml"), "version: 1\nrules: []\n").expect("write file");
 
         let snapshot = PolicyDirectoryLoader::new(&root)
             .load()
             .expect("load directory snapshot");
         let error = YamlParser
-            .parse(snapshot)
-            .expect_err("duplicate rule ids should fail");
-        assert!(matches!(error, PolicyInfraError::DuplicateRuleId { .. }));
+            .parse_static_policy(snapshot)
+            .expect_err("missing static policy should fail");
+
+        assert!(matches!(
+            error,
+            PolicyInfraError::StaticPolicyMissing { .. }
+        ));
+    }
+
+    fn valid_static_policy_yaml() -> &'static str {
+        r#"
+version: 1
+revision: 9
+default_action: deny
+capabilities:
+  fs_read: ["/work/**"]
+  fs_write: ["/work/**"]
+  fs_delete: ["/work/**"]
+  net_connect: []
+  allow_host_exec: false
+  allow_process_control: false
+  allow_privilege: false
+  allow_credential_access: false
+backends:
+  backend_order: ["sandbox"]
+  capability_matrix:
+    sandbox:
+      fs_read: ["/work/**"]
+      fs_write: ["/work/**"]
+      fs_delete: ["/work/**"]
+      net_connect: []
+      allow_host_exec: false
+      allow_process_control: false
+      allow_privilege: false
+      allow_credential_access: false
+  profiles:
+    sandbox:
+      type: sandbox
+      profile_id: "sandbox-default"
+      network_default: "deny"
+      writable_roots: ["/work/**"]
+      readonly_roots: ["/usr/**"]
+      syscall_policy: "baseline"
+      limits:
+        cpu_ms: 1000
+        memory_mb: 128
+        pids: 64
+        disk_mb: 256
+        timeout_ms: 60000
+"#
     }
 }

@@ -8,6 +8,16 @@ use prost_types::{Struct as ProstStruct, Value as ProstValue, value::Kind as Pro
 /// The resulting payload uses `{"command": "<your command>"}` format, which is
 /// accepted by daemon task command extraction.
 ///
+/// Valid operation kinds in capability-first mode are:
+/// - `exec`
+/// - `fs.read`
+/// - `fs.write`
+/// - `net`
+/// - `tool`
+///
+/// This helper intentionally only builds `exec`.
+/// Runtime/backend override fields are not supported in payload/options/labels.
+///
 /// # Examples
 /// ```
 /// use af_sdk::exec_operation;

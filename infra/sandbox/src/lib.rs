@@ -24,8 +24,8 @@ pub enum FilesystemMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum NetworkPolicy {
-    Disabled,
     #[default]
+    Disabled,
     Full,
     ProxyOnly,
 }

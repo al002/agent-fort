@@ -88,8 +88,8 @@ impl DecisionMapper {
 
     pub fn map_no_match(&self, revision: u64, trace: PolicyEvaluationTrace) -> ExecutionContract {
         ExecutionContract {
-            decision: PolicyDecision::Allow,
-            reason: Some("no policy rule matched".to_string()),
+            decision: PolicyDecision::Ask,
+            reason: Some("no policy rule matched; approval required".to_string()),
             runtime_backend: None,
             requirements: Vec::new(),
             approval: None,

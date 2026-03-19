@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 
+use af_policy::PolicyDecision;
 use af_policy_infra::{CompiledPolicies, CompiledRule};
 use thiserror::Error;
 
@@ -59,6 +60,7 @@ impl PolicyEvaluator {
         compiled: &CompiledPolicies,
         operation: &NormalizedOperation,
     ) -> Result<ExecutionContract, PolicyEvaluationFailure> {
+        let force_unknown_intent_ask = requires_unknown_intent_approval(operation);
         let mut candidates = compiled
             .rules
             .iter()
@@ -85,24 +87,40 @@ impl PolicyEvaluator {
                 })?;
             if matched {
                 matched_rule_ids.push(rule.rule.id.clone());
-                return Ok(self.decision_mapper.map_matched_rule(
+                let mut contract = self.decision_mapper.map_matched_rule(
                     rule,
                     compiled.revision,
                     PolicyEvaluationTrace::new(candidate_rule_count, matched_rule_ids),
-                ));
+                );
+                if force_unknown_intent_ask && contract.decision == PolicyDecision::Allow {
+                    contract.decision = PolicyDecision::Ask;
+                    contract.reason = Some("unknown command intent requires approval".to_string());
+                }
+                return Ok(contract);
             }
         }
 
-        Ok(self.decision_mapper.map_no_match(
+        let mut contract = self.decision_mapper.map_no_match(
             compiled.revision,
             PolicyEvaluationTrace::new(candidate_rule_count, matched_rule_ids),
-        ))
+        );
+        if force_unknown_intent_ask {
+            contract.reason = Some("unknown command intent requires approval".to_string());
+        }
+        Ok(contract)
     }
 
     fn compare_compiled_rules(&self, left: &CompiledRule, right: &CompiledRule) -> Ordering {
         self.rule_sorter
             .compare_rules(&left.rule, &left.source, &right.rule, &right.source)
     }
+}
+
+fn requires_unknown_intent_approval(operation: &NormalizedOperation) -> bool {
+    matches!(
+        operation.facts.unknown_intent,
+        crate::operation::Fact::Known(true)
+    )
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -208,7 +226,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_to_allow_when_no_rule_matches() {
+    fn defaults_to_ask_when_no_rule_matches() {
         let compiled = compiled(vec![rule(
             "write-only",
             PolicyRuleKind::Deny,
@@ -231,11 +249,49 @@ mod tests {
         )]);
 
         let contract = PolicyEvaluator::default().evaluate(&compiled, &fetch_operation());
-        assert_eq!(contract.decision, PolicyDecision::Allow);
+        assert_eq!(contract.decision, PolicyDecision::Ask);
         assert!(contract.matched_rule.is_none());
         assert_eq!(contract.evaluation_trace.candidate_rule_count, 0);
         assert!(contract.evaluation_trace.matched_rule_ids.is_empty());
         assert!(!contract.fail_closed);
+    }
+
+    #[test]
+    fn forces_ask_when_unknown_intent_matches_allow_rule() {
+        let compiled = compiled(vec![rule(
+            "allow-all-fetch",
+            PolicyRuleKind::Allow,
+            100,
+            PolicyMatch {
+                operation_kinds: vec!["fetch".to_string()],
+                interactive: None,
+                requires_network: None,
+                requires_write: None,
+                tags: vec![],
+            },
+            "true",
+            PolicyEffect {
+                decision: PolicyDecision::Allow,
+                reason: Some("allow fetch".to_string()),
+                runtime_backend: None,
+                requirements: Vec::new(),
+                approval: None,
+            },
+        )]);
+
+        let mut operation = fetch_operation();
+        operation.facts.unknown_intent = Fact::Known(true);
+
+        let contract = PolicyEvaluator::default().evaluate(&compiled, &operation);
+        assert_eq!(contract.decision, PolicyDecision::Ask);
+        assert_eq!(
+            contract.reason.as_deref(),
+            Some("unknown command intent requires approval")
+        );
+        assert_eq!(
+            contract.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("allow-all-fetch")
+        );
     }
 
     #[test]
@@ -251,7 +307,7 @@ mod tests {
                 requires_write: None,
                 tags: vec![],
             },
-            "facts.requires_network + 1",
+            "facts.network_access + 1",
             PolicyEffect {
                 decision: PolicyDecision::Allow,
                 reason: None,
@@ -328,11 +384,20 @@ mod tests {
             },
             facts: Facts {
                 interactive: Fact::Known(false),
-                requires_network: Fact::Known(true),
-                requires_write: Fact::Known(false),
+                safe_file_read: Fact::Known(false),
+                safe_file_write: Fact::Known(false),
+                system_file_read: Fact::Known(false),
+                system_file_write: Fact::Known(false),
+                network_access: Fact::Known(true),
+                system_admin: Fact::Known(false),
+                process_control: Fact::Known(false),
+                credential_access: Fact::Known(false),
+                unknown_intent: Fact::Known(false),
                 touches_policy_dir: Fact::Known(false),
                 primary_host: Fact::Known("example.com".to_string()),
+                command_text: Fact::Unknown,
                 affected_paths: Vec::new(),
+                reason_codes: Vec::new(),
             },
             runtime: RuntimeContext {
                 platform: RuntimePlatform::Linux,

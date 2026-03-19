@@ -87,11 +87,20 @@ impl std::fmt::Display for TargetKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Facts {
     pub interactive: Fact<bool>,
-    pub requires_network: Fact<bool>,
-    pub requires_write: Fact<bool>,
+    pub safe_file_read: Fact<bool>,
+    pub safe_file_write: Fact<bool>,
+    pub system_file_read: Fact<bool>,
+    pub system_file_write: Fact<bool>,
+    pub network_access: Fact<bool>,
+    pub system_admin: Fact<bool>,
+    pub process_control: Fact<bool>,
+    pub credential_access: Fact<bool>,
+    pub unknown_intent: Fact<bool>,
     pub touches_policy_dir: Fact<bool>,
     pub primary_host: Fact<String>,
+    pub command_text: Fact<String>,
     pub affected_paths: Vec<PathBuf>,
+    pub reason_codes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

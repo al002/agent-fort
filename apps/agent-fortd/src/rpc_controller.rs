@@ -9,9 +9,10 @@ use af_approval::{
 use af_audit::{AuditEventType, AuditRepository, NewAuditEvent};
 use af_core::{
     ApprovalAppError, ApprovalAppService, CancelTaskInput, CreateSessionInput, CreateTaskInput,
-    Fact, GetApprovalInput, OperationKind, OperationNormalizer, PolicyEvaluator, RawOperation,
-    RespondApprovalInput, RuntimeContext, RuntimePlatform, SessionAppError, SessionAppService,
-    SessionConfig, TargetKind, TaskAppError, TaskAppService,
+    ExecutionContract, Fact, GetApprovalInput, OperationKind, OperationNormalizer,
+    PolicyEvaluationTrace, PolicyEvaluator, RawOperation, RespondApprovalInput, RuntimeContext,
+    RuntimePlatform, SessionAppError, SessionAppService, SessionConfig, TargetKind, TaskAppError,
+    TaskAppService,
 };
 use af_policy::PolicyDecision;
 use af_policy_infra::{CompiledPolicies, PolicyRuntime};
@@ -32,7 +33,7 @@ use af_rpc_transport::{RpcConnection, TransportError};
 use af_sandbox::{
     FilesystemMode, FilesystemPolicy, NetworkPolicy, OutputCapturePolicy, PtyPolicy,
     ResourceGovernanceMode, ResourceLimits, SandboxExecRequest, SandboxExecResult,
-    SandboxExitStatus, SyscallPolicy, TraceContext,
+    SandboxExitStatus, SyscallPolicy, TraceContext, WritableRoot,
 };
 use af_session::{SessionRepository, SessionRepositoryError, SessionStatus as DomainSessionStatus};
 use af_store::Store;
@@ -471,7 +472,11 @@ impl RpcController {
                             Ok(operation) => operation,
                             Err(error_response) => return error_response,
                         };
-                        match self.execute_single_step_task(task.clone(), operation) {
+                        match self.execute_approved_single_step_task(
+                            task.clone(),
+                            operation,
+                            &responded.approval,
+                        ) {
                             Ok((updated_task, task_outcome)) => {
                                 task = updated_task;
                                 outcome = Some(task_outcome);
@@ -530,6 +535,31 @@ impl RpcController {
                 execute_deny_path(&self.state.store, task, &contract)
             }
         }
+    }
+
+    fn execute_approved_single_step_task(
+        &self,
+        task: af_task::Task,
+        operation: TaskOperation,
+        approval: &af_approval::Approval,
+    ) -> Result<(af_task::Task, TaskOutcome), RpcResponse> {
+        let runtime = self.state.execution_runtime.as_ref().ok_or_else(|| {
+            err(
+                RpcErrorCode::InternalError,
+                "execution runtime not configured",
+            )
+        })?;
+        let normalized =
+            normalize_task_operation(&operation, runtime, &self.state.daemon_instance_id)?;
+        let contract = approved_execution_contract(approval);
+        execute_allow_path(
+            &self.state.store,
+            runtime,
+            task,
+            &normalized,
+            &operation,
+            &contract,
+        )
     }
 
     fn ensure_session_access(
@@ -962,34 +992,48 @@ fn build_sandbox_request(
 ) -> Result<SandboxExecRequest, RpcResponse> {
     let payload = struct_to_json(operation.payload.as_ref());
     let options = struct_to_json(operation.options.as_ref());
+    let sandbox_root = default_sandbox_root(runtime.workspace_root.as_deref())?;
     let command = extract_command(&payload, &options)?;
-    let cwd = extract_cwd(&payload, &options, runtime.workspace_root.as_deref())?;
+    let cwd = extract_cwd(&payload, &options, sandbox_root.as_path())?;
     let env = extract_env(&payload, &options)?;
-    let limits = parse_resource_limits(task.limits_json.as_deref())?;
-    let capture = parse_capture_policy(task.limits_json.as_deref())?;
-    let network = if matches!(normalized.facts.requires_network, Fact::Known(false)) {
-        NetworkPolicy::Disabled
-    } else {
-        NetworkPolicy::Full
-    };
+    let parsed_limits = parse_limits_json_value(task.limits_json.as_deref())?;
+    let limits = parse_resource_limits(parsed_limits.as_ref());
+    let capture = parse_capture_policy(parsed_limits.as_ref());
+    let sandbox_overrides = parse_sandbox_overrides(parsed_limits.as_ref())?;
+    let default_network = default_network_policy_for_operation(normalized);
+    let network = sandbox_overrides.network.unwrap_or(default_network);
+    let filesystem_mode = sandbox_overrides
+        .filesystem_mode
+        .unwrap_or(FilesystemMode::Restricted);
+    let include_platform_defaults = sandbox_overrides.include_platform_defaults.unwrap_or(true);
+    let mount_proc = sandbox_overrides.mount_proc.unwrap_or(true);
+    let governance_mode = sandbox_overrides
+        .governance_mode
+        .unwrap_or(ResourceGovernanceMode::BestEffort);
+    let syscall_policy = sandbox_overrides
+        .syscall_policy
+        .unwrap_or(SyscallPolicy::Baseline);
 
     Ok(SandboxExecRequest {
         command,
         cwd,
         env,
         filesystem: FilesystemPolicy {
-            mode: FilesystemMode::FullAccess,
-            include_platform_defaults: false,
-            mount_proc: true,
+            mode: filesystem_mode,
+            include_platform_defaults,
+            mount_proc,
             readable_roots: Vec::new(),
-            writable_roots: Vec::new(),
+            writable_roots: vec![WritableRoot {
+                root: sandbox_root,
+                read_only_subpaths: Vec::new(),
+            }],
             unreadable_roots: Vec::new(),
         },
         network,
         pty: PtyPolicy::Disabled,
         limits,
-        governance_mode: ResourceGovernanceMode::BestEffort,
-        syscall_policy: SyscallPolicy::Baseline,
+        governance_mode,
+        syscall_policy,
         capture,
         trace: TraceContext {
             session_id: Some(task.session_id.clone()),
@@ -999,10 +1043,19 @@ fn build_sandbox_request(
     })
 }
 
-fn parse_resource_limits(raw: Option<&str>) -> Result<ResourceLimits, RpcResponse> {
-    let mut limits = ResourceLimits::default();
+fn default_network_policy_for_operation(
+    normalized: &af_core::NormalizedOperation,
+) -> NetworkPolicy {
+    if matches!(normalized.facts.network_access, Fact::Known(true)) {
+        NetworkPolicy::Full
+    } else {
+        NetworkPolicy::Disabled
+    }
+}
+
+fn parse_limits_json_value(raw: Option<&str>) -> Result<Option<Value>, RpcResponse> {
     let Some(raw) = raw else {
-        return Ok(limits);
+        return Ok(None);
     };
     let parsed = serde_json::from_str::<Value>(raw).map_err(|error| {
         err(
@@ -1010,6 +1063,14 @@ fn parse_resource_limits(raw: Option<&str>) -> Result<ResourceLimits, RpcRespons
             format!("limits_json parse failed: {error}"),
         )
     })?;
+    Ok(Some(parsed))
+}
+
+fn parse_resource_limits(parsed: Option<&Value>) -> ResourceLimits {
+    let mut limits = ResourceLimits::default();
+    let Some(parsed) = parsed else {
+        return limits;
+    };
     if let Some(value) = find_u64(&parsed, "wall_timeout_secs") {
         limits.wall_timeout = Duration::from_secs(value.max(1));
     }
@@ -1022,20 +1083,14 @@ fn parse_resource_limits(raw: Option<&str>) -> Result<ResourceLimits, RpcRespons
     limits.max_file_size_bytes = find_u64(&parsed, "max_file_size_bytes");
     limits.cpu_max_percent =
         find_u64(&parsed, "cpu_max_percent").and_then(|value| u32::try_from(value).ok());
-    Ok(limits)
+    limits
 }
 
-fn parse_capture_policy(raw: Option<&str>) -> Result<OutputCapturePolicy, RpcResponse> {
+fn parse_capture_policy(parsed: Option<&Value>) -> OutputCapturePolicy {
     let mut capture = OutputCapturePolicy::default();
-    let Some(raw) = raw else {
-        return Ok(capture);
+    let Some(parsed) = parsed else {
+        return capture;
     };
-    let parsed = serde_json::from_str::<Value>(raw).map_err(|error| {
-        err(
-            RpcErrorCode::BadRequest,
-            format!("limits_json parse failed: {error}"),
-        )
-    })?;
     if let Some(value) =
         find_u64(&parsed, "stdout_max_bytes").and_then(|value| usize::try_from(value).ok())
     {
@@ -1046,7 +1101,149 @@ fn parse_capture_policy(raw: Option<&str>) -> Result<OutputCapturePolicy, RpcRes
     {
         capture.stderr_max_bytes = value.max(1);
     }
-    Ok(capture)
+    capture
+}
+
+#[derive(Debug, Clone, Default)]
+struct SandboxOverrides {
+    network: Option<NetworkPolicy>,
+    filesystem_mode: Option<FilesystemMode>,
+    include_platform_defaults: Option<bool>,
+    mount_proc: Option<bool>,
+    governance_mode: Option<ResourceGovernanceMode>,
+    syscall_policy: Option<SyscallPolicy>,
+}
+
+fn parse_sandbox_overrides(parsed: Option<&Value>) -> Result<SandboxOverrides, RpcResponse> {
+    let Some(root) = parsed else {
+        return Ok(SandboxOverrides::default());
+    };
+    let Some(root_object) = root.as_object() else {
+        return Err(err(
+            RpcErrorCode::BadRequest,
+            "limits_json must be a JSON object",
+        ));
+    };
+
+    let Some(sandbox) = root_object.get("sandbox") else {
+        return Ok(SandboxOverrides::default());
+    };
+    let Some(sandbox_object) = sandbox.as_object() else {
+        return Err(err(
+            RpcErrorCode::BadRequest,
+            "limits_json.sandbox must be a JSON object",
+        ));
+    };
+
+    let mut overrides = SandboxOverrides::default();
+    if let Some(value) = sandbox_object.get("network") {
+        let text = value.as_str().ok_or_else(|| {
+            err(
+                RpcErrorCode::BadRequest,
+                "limits_json.sandbox.network must be a string",
+            )
+        })?;
+        overrides.network = Some(parse_network_policy(text)?);
+    }
+    if let Some(value) = sandbox_object.get("filesystem_mode") {
+        let text = value.as_str().ok_or_else(|| {
+            err(
+                RpcErrorCode::BadRequest,
+                "limits_json.sandbox.filesystem_mode must be a string",
+            )
+        })?;
+        overrides.filesystem_mode = Some(parse_filesystem_mode(text)?);
+    }
+    if let Some(value) = sandbox_object.get("include_platform_defaults") {
+        let flag = value.as_bool().ok_or_else(|| {
+            err(
+                RpcErrorCode::BadRequest,
+                "limits_json.sandbox.include_platform_defaults must be a boolean",
+            )
+        })?;
+        overrides.include_platform_defaults = Some(flag);
+    }
+    if let Some(value) = sandbox_object.get("mount_proc") {
+        let flag = value.as_bool().ok_or_else(|| {
+            err(
+                RpcErrorCode::BadRequest,
+                "limits_json.sandbox.mount_proc must be a boolean",
+            )
+        })?;
+        overrides.mount_proc = Some(flag);
+    }
+    if let Some(value) = sandbox_object.get("governance_mode") {
+        let text = value.as_str().ok_or_else(|| {
+            err(
+                RpcErrorCode::BadRequest,
+                "limits_json.sandbox.governance_mode must be a string",
+            )
+        })?;
+        overrides.governance_mode = Some(parse_governance_mode(text)?);
+    }
+    if let Some(value) = sandbox_object.get("syscall_policy") {
+        let text = value.as_str().ok_or_else(|| {
+            err(
+                RpcErrorCode::BadRequest,
+                "limits_json.sandbox.syscall_policy must be a string",
+            )
+        })?;
+        overrides.syscall_policy = Some(parse_syscall_policy(text)?);
+    }
+
+    Ok(overrides)
+}
+
+fn parse_network_policy(value: &str) -> Result<NetworkPolicy, RpcResponse> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "disabled" => Ok(NetworkPolicy::Disabled),
+        "full" => Ok(NetworkPolicy::Full),
+        _ => Err(err(
+            RpcErrorCode::BadRequest,
+            format!("unsupported limits_json.sandbox.network `{value}`; expected disabled|full"),
+        )),
+    }
+}
+
+fn parse_filesystem_mode(value: &str) -> Result<FilesystemMode, RpcResponse> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "restricted" => Ok(FilesystemMode::Restricted),
+        "read_only" | "readonly" | "read-only" => Ok(FilesystemMode::ReadOnly),
+        "full_access" | "full-access" => Ok(FilesystemMode::FullAccess),
+        _ => Err(err(
+            RpcErrorCode::BadRequest,
+            format!(
+                "unsupported limits_json.sandbox.filesystem_mode `{value}`; expected restricted|read_only|full_access"
+            ),
+        )),
+    }
+}
+
+fn parse_governance_mode(value: &str) -> Result<ResourceGovernanceMode, RpcResponse> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "required" => Ok(ResourceGovernanceMode::Required),
+        "best_effort" | "best-effort" => Ok(ResourceGovernanceMode::BestEffort),
+        "disabled" => Ok(ResourceGovernanceMode::Disabled),
+        _ => Err(err(
+            RpcErrorCode::BadRequest,
+            format!(
+                "unsupported limits_json.sandbox.governance_mode `{value}`; expected required|best_effort|disabled"
+            ),
+        )),
+    }
+}
+
+fn parse_syscall_policy(value: &str) -> Result<SyscallPolicy, RpcResponse> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "baseline" => Ok(SyscallPolicy::Baseline),
+        "unconfined" => Ok(SyscallPolicy::Unconfined),
+        _ => Err(err(
+            RpcErrorCode::BadRequest,
+            format!(
+                "unsupported limits_json.sandbox.syscall_policy `{value}`; expected baseline|unconfined"
+            ),
+        )),
+    }
 }
 
 fn extract_command(payload: &Value, options: &Value) -> Result<Vec<String>, RpcResponse> {
@@ -1105,7 +1302,7 @@ fn extract_command(payload: &Value, options: &Value) -> Result<Vec<String>, RpcR
 fn extract_cwd(
     payload: &Value,
     options: &Value,
-    workspace_root: Option<&Path>,
+    default_cwd: &Path,
 ) -> Result<PathBuf, RpcResponse> {
     let cwd = payload
         .as_object()
@@ -1118,18 +1315,12 @@ fn extract_cwd(
                 .and_then(Value::as_str)
         })
         .map(PathBuf::from)
-        .or_else(|| workspace_root.map(PathBuf::from))
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| PathBuf::from("/"));
+        .unwrap_or_else(|| default_cwd.to_path_buf());
 
     let resolved = if cwd.is_absolute() {
         cwd
     } else {
-        let base = workspace_root
-            .map(PathBuf::from)
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_else(|| PathBuf::from("/"));
-        base.join(cwd)
+        default_cwd.join(cwd)
     };
     if !resolved.is_absolute() {
         return Err(err(
@@ -1137,6 +1328,33 @@ fn extract_cwd(
             format!("resolved cwd must be absolute: {}", resolved.display()),
         ));
     }
+    Ok(resolved)
+}
+
+fn default_sandbox_root(workspace_root: Option<&Path>) -> Result<PathBuf, RpcResponse> {
+    let candidate = workspace_root
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("/"));
+
+    let resolved = if candidate.is_absolute() {
+        candidate
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("/"))
+            .join(candidate)
+    };
+
+    if !resolved.is_absolute() {
+        return Err(err(
+            RpcErrorCode::BadRequest,
+            format!(
+                "default sandbox root must be absolute: {}",
+                resolved.display()
+            ),
+        ));
+    }
+
     Ok(resolved)
 }
 
@@ -1181,7 +1399,7 @@ fn build_execution_effects(
         normalized.intent.kind,
         OperationKind::FileWrite | OperationKind::FilePatch
     ) || (matches!(normalized.intent.kind, OperationKind::Fetch)
-        && matches!(normalized.facts.requires_write, Fact::Known(true)));
+        && any_file_write(normalized));
 
     if matches!(normalized.intent.kind, OperationKind::FileRead) {
         for path in &normalized.facts.affected_paths {
@@ -1203,7 +1421,7 @@ fn build_execution_effects(
         }
     }
 
-    if matches!(normalized.facts.requires_network, Fact::Known(true)) {
+    if matches!(normalized.facts.network_access, Fact::Known(true)) {
         let mut hosts = normalized
             .intent
             .targets
@@ -1270,6 +1488,11 @@ fn push_execution_effect(
     }
 }
 
+fn any_file_write(normalized: &af_core::NormalizedOperation) -> bool {
+    matches!(normalized.facts.safe_file_write, Fact::Known(true))
+        || matches!(normalized.facts.system_file_write, Fact::Known(true))
+}
+
 fn execution_result_from_sandbox(result: SandboxExecResult) -> ExecutionResult {
     let state = if result.timed_out {
         "timed_out".to_string()
@@ -1324,6 +1547,56 @@ fn approval_snapshot_json(
         "operation": task_operation_to_json(operation),
     })
     .to_string()
+}
+
+fn approved_execution_contract(approval: &af_approval::Approval) -> ExecutionContract {
+    let (candidate_rule_count, matched_rule_ids) =
+        approval_snapshot_trace(&approval.execution_contract_json);
+
+    ExecutionContract {
+        decision: PolicyDecision::Allow,
+        reason: Some("approved by user response".to_string()),
+        runtime_backend: Some("sandbox".to_string()),
+        requirements: Vec::new(),
+        approval: None,
+        policy_revision: approval.policy_revision,
+        matched_rule: None,
+        evaluation_trace: PolicyEvaluationTrace::new(candidate_rule_count, matched_rule_ids),
+        fail_closed: false,
+    }
+}
+
+fn approval_snapshot_trace(raw: &str) -> (usize, Vec<String>) {
+    let Ok(parsed) = serde_json::from_str::<Value>(raw) else {
+        return (0, Vec::new());
+    };
+    let contract = parsed
+        .as_object()
+        .and_then(|obj| obj.get("contract"))
+        .and_then(Value::as_object);
+    let Some(contract) = contract else {
+        return (0, Vec::new());
+    };
+
+    let candidate_rule_count = contract
+        .get("candidate_rule_count")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(0);
+
+    let matched_rule_ids = contract
+        .get("matched_rule_ids")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    (candidate_rule_count, matched_rule_ids)
 }
 
 fn task_operation_from_approval_snapshot(raw: &str) -> Result<TaskOperation, RpcResponse> {
@@ -2244,11 +2517,20 @@ mod tests {
             },
             facts: Facts {
                 interactive: Fact::Known(false),
-                requires_network: Fact::Known(true),
-                requires_write: Fact::Known(true),
+                safe_file_read: Fact::Known(false),
+                safe_file_write: Fact::Known(true),
+                system_file_read: Fact::Known(false),
+                system_file_write: Fact::Known(false),
+                network_access: Fact::Known(true),
+                system_admin: Fact::Known(false),
+                process_control: Fact::Known(false),
+                credential_access: Fact::Known(false),
+                unknown_intent: Fact::Known(false),
                 touches_policy_dir: Fact::Known(false),
                 primary_host: Fact::Known("example.com".to_string()),
+                command_text: Fact::Unknown,
                 affected_paths: vec![PathBuf::from("/tmp/out.txt")],
+                reason_codes: Vec::new(),
             },
             runtime: RuntimeContext {
                 platform: RuntimePlatform::Linux,
@@ -2295,11 +2577,20 @@ mod tests {
             },
             facts: Facts {
                 interactive: Fact::Known(false),
-                requires_network: Fact::Known(true),
-                requires_write: Fact::Unknown,
+                safe_file_read: Fact::Unknown,
+                safe_file_write: Fact::Unknown,
+                system_file_read: Fact::Unknown,
+                system_file_write: Fact::Unknown,
+                network_access: Fact::Known(true),
+                system_admin: Fact::Unknown,
+                process_control: Fact::Unknown,
+                credential_access: Fact::Unknown,
+                unknown_intent: Fact::Unknown,
                 touches_policy_dir: Fact::Known(false),
                 primary_host: Fact::Unknown,
+                command_text: Fact::Known("/bin/sh -lc echo hi".to_string()),
                 affected_paths: Vec::new(),
+                reason_codes: Vec::new(),
             },
             runtime: RuntimeContext {
                 platform: RuntimePlatform::Linux,
@@ -2315,6 +2606,87 @@ mod tests {
             ExecutionEffectKind::NetworkEgress,
             "*"
         ));
+    }
+
+    #[test]
+    fn default_network_policy_disables_when_network_fact_is_unknown() {
+        let normalized = NormalizedOperation {
+            intent: Intent {
+                kind: OperationKind::Exec,
+                labels: Default::default(),
+                tags: Default::default(),
+                targets: Vec::new(),
+            },
+            facts: Facts {
+                interactive: Fact::Known(false),
+                safe_file_read: Fact::Unknown,
+                safe_file_write: Fact::Unknown,
+                system_file_read: Fact::Unknown,
+                system_file_write: Fact::Unknown,
+                network_access: Fact::Unknown,
+                system_admin: Fact::Unknown,
+                process_control: Fact::Unknown,
+                credential_access: Fact::Unknown,
+                unknown_intent: Fact::Unknown,
+                touches_policy_dir: Fact::Known(false),
+                primary_host: Fact::Unknown,
+                command_text: Fact::Unknown,
+                affected_paths: Vec::new(),
+                reason_codes: Vec::new(),
+            },
+            runtime: RuntimeContext {
+                platform: RuntimePlatform::Linux,
+                daemon_instance_id: "daemon-1".to_string(),
+                policy_dir: PathBuf::from("/tmp/policies"),
+                workspace_root: Some(PathBuf::from("/tmp")),
+            },
+        };
+
+        assert_eq!(
+            default_network_policy_for_operation(&normalized),
+            NetworkPolicy::Disabled
+        );
+    }
+
+    #[test]
+    fn parse_sandbox_overrides_accepts_explicit_settings() {
+        let parsed = json!({
+            "sandbox": {
+                "network": "full",
+                "filesystem_mode": "read_only",
+                "include_platform_defaults": false,
+                "mount_proc": false,
+                "governance_mode": "required",
+                "syscall_policy": "unconfined"
+            }
+        });
+        let overrides = parse_sandbox_overrides(Some(&parsed)).expect("parse sandbox overrides");
+
+        assert_eq!(overrides.network, Some(NetworkPolicy::Full));
+        assert_eq!(overrides.filesystem_mode, Some(FilesystemMode::ReadOnly));
+        assert_eq!(overrides.include_platform_defaults, Some(false));
+        assert_eq!(overrides.mount_proc, Some(false));
+        assert_eq!(
+            overrides.governance_mode,
+            Some(ResourceGovernanceMode::Required)
+        );
+        assert_eq!(overrides.syscall_policy, Some(SyscallPolicy::Unconfined));
+    }
+
+    #[test]
+    fn parse_sandbox_overrides_rejects_invalid_network_value() {
+        let parsed = json!({
+            "sandbox": {
+                "network": "all"
+            }
+        });
+        let response = parse_sandbox_overrides(Some(&parsed)).expect_err("network=all must fail");
+        let rpc_error = match response.outcome {
+            Some(rpc_response::Outcome::Error(error)) => error,
+            other => panic!("expected rpc error response, got {other:?}"),
+        };
+        assert_eq!(rpc_error.code, RpcErrorCode::BadRequest as i32);
+        assert!(rpc_error.message.contains("sandbox.network"));
     }
 
     #[test]
@@ -2365,6 +2737,73 @@ mod tests {
             other => panic!("expected rpc error response, got {other:?}"),
         };
         assert_eq!(rpc_error.code, RpcErrorCode::InternalError as i32);
+    }
+
+    #[test]
+    fn approval_snapshot_trace_extracts_rule_info() {
+        let snapshot = json!({
+            "schema": "task_approval_snapshot.v1",
+            "contract": {
+                "candidate_rule_count": 3,
+                "matched_rule_ids": ["r-deny", "r-ask"]
+            },
+            "operation": {
+                "kind": "exec",
+                "payload": {},
+                "options": {},
+                "labels": {}
+            }
+        })
+        .to_string();
+
+        let (candidate_rule_count, matched_rule_ids) = approval_snapshot_trace(&snapshot);
+        assert_eq!(candidate_rule_count, 3);
+        assert_eq!(
+            matched_rule_ids,
+            vec!["r-deny".to_string(), "r-ask".to_string()]
+        );
+    }
+
+    #[test]
+    fn approved_execution_contract_always_allows() {
+        let approval = af_approval::Approval {
+            approval_id: "approval-1".to_string(),
+            session_id: "session-1".to_string(),
+            task_id: "task-1".to_string(),
+            trace_id: "trace-1".to_string(),
+            status: ApprovalStatus::Approved,
+            summary: "approval required".to_string(),
+            details: None,
+            items: Vec::new(),
+            policy_reason: "manual approval".to_string(),
+            policy_revision: 42,
+            execution_contract_json: json!({
+                "schema": "task_approval_snapshot.v1",
+                "contract": {
+                    "candidate_rule_count": 2,
+                    "matched_rule_ids": ["r-ask"],
+                    "final_decision": "ask"
+                },
+                "operation": {
+                    "kind": "exec",
+                    "payload": {},
+                    "options": {},
+                    "labels": {}
+                }
+            })
+            .to_string(),
+            created_at_ms: 1_000,
+            expires_at_ms: 2_000,
+            responded_at_ms: Some(1_200),
+            response_reason: Some("approved".to_string()),
+            response_idempotency_key: Some("idem-1".to_string()),
+        };
+
+        let contract = approved_execution_contract(&approval);
+        assert_eq!(contract.decision, PolicyDecision::Allow);
+        assert_eq!(contract.policy_revision, 42);
+        assert_eq!(contract.evaluation_trace.candidate_rule_count, 2);
+        assert_eq!(contract.evaluation_trace.matched_rule_ids, vec!["r-ask"]);
     }
 
     fn has_effect(effects: &[ExecutionEffect], kind: ExecutionEffectKind, target: &str) -> bool {

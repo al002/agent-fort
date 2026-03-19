@@ -13,3 +13,5 @@ af-task = { path = "../domain/task" }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
+tree-sitter = "0.25.10"
+tree-sitter-bash = "0.25.1"

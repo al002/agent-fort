@@ -37,14 +37,11 @@ fn matches_selector(selector: &PolicyMatch, operation: &NormalizedOperation) -> 
     }
     if !matches_bool(
         selector.requires_network,
-        operation.facts.requires_network.as_ref(),
+        operation.facts.network_access.as_ref(),
     ) {
         return false;
     }
-    if !matches_bool(
-        selector.requires_write,
-        operation.facts.requires_write.as_ref(),
-    ) {
+    if !matches_bool(selector.requires_write, any_write_fact(operation)) {
         return false;
     }
 
@@ -73,6 +70,32 @@ fn matches_bool(expected: Option<bool>, actual: Fact<&bool>) -> bool {
     }
 }
 
+fn any_write_fact(operation: &NormalizedOperation) -> Fact<&bool> {
+    match (
+        operation.facts.safe_file_write.as_ref(),
+        operation.facts.system_file_write.as_ref(),
+    ) {
+        (Fact::Known(left), Fact::Known(right)) => {
+            if *left || *right {
+                static TRUE_VALUE: bool = true;
+                Fact::Known(&TRUE_VALUE)
+            } else {
+                static FALSE_VALUE: bool = false;
+                Fact::Known(&FALSE_VALUE)
+            }
+        }
+        (Fact::Known(value), Fact::Unknown) | (Fact::Unknown, Fact::Known(value)) => {
+            if *value {
+                static TRUE_VALUE: bool = true;
+                Fact::Known(&TRUE_VALUE)
+            } else {
+                Fact::Unknown
+            }
+        }
+        (Fact::Unknown, Fact::Unknown) => Fact::Unknown,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
@@ -93,11 +116,20 @@ mod tests {
             },
             facts: Facts {
                 interactive: Fact::Known(false),
-                requires_network: Fact::Known(true),
-                requires_write: Fact::Known(false),
+                safe_file_read: Fact::Known(false),
+                safe_file_write: Fact::Known(false),
+                system_file_read: Fact::Known(false),
+                system_file_write: Fact::Known(false),
+                network_access: Fact::Known(true),
+                system_admin: Fact::Known(false),
+                process_control: Fact::Known(false),
+                credential_access: Fact::Known(false),
+                unknown_intent: Fact::Known(false),
                 touches_policy_dir: Fact::Known(false),
                 primary_host: Fact::Known("example.com".to_string()),
+                command_text: Fact::Unknown,
                 affected_paths: Vec::new(),
+                reason_codes: Vec::new(),
             },
             runtime: RuntimeContext {
                 platform: RuntimePlatform::Linux,
@@ -155,7 +187,7 @@ mod tests {
     #[test]
     fn keeps_rule_when_fact_is_unknown() {
         let mut op = operation();
-        op.facts.requires_network = Fact::Unknown;
+        op.facts.network_access = Fact::Unknown;
         let rule = rule(PolicyMatch {
             operation_kinds: vec!["fetch".to_string()],
             interactive: None,

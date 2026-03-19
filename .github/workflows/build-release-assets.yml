@@ -1,0 +1,80 @@
+name: Build And Release Assets
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "**"
+
+jobs:
+  build-assets:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Release Artifacts
+        run: cargo build --locked --release -p agent-fortd -p af-helper -p af-bootstrap -p af-sdk
+
+      - name: Build Static bwrap
+        run: cargo xtask bwrap build --target linux-x86_64 --engine docker
+
+      - name: Package Runtime Bundle From Build Outputs
+        run: cargo xtask package bundle --target linux-x86_64 --profile release --skip-build
+
+      - name: Package Bootstrap From Build Outputs
+        run: cargo xtask package af-bootstrap --target linux-x86_64 --profile release --skip-build
+
+      - name: Stage Downloadable Assets
+        run: |
+          mkdir -p dist/linux-x86_64
+          cp assets/agent-fortd/linux-x86_64/bundle.tar.gz dist/linux-x86_64/
+          cp assets/agent-fortd/linux-x86_64/manifest.json dist/linux-x86_64/
+          cp assets/agent-fortd/linux-x86_64/bundle.sha256 dist/linux-x86_64/
+          cp assets/af-bootstrap/linux-x86_64/af-bootstrap dist/linux-x86_64/
+          cp assets/af-bootstrap/linux-x86_64/af-bootstrap.sha256 dist/linux-x86_64/
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-assets-linux-x86_64
+          path: dist/linux-x86_64/
+          if-no-files-found: error
+          retention-days: 14
+
+  release-assets:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    needs: build-assets
+    permissions:
+      contents: write
+    steps:
+      - name: Download Build Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-assets-linux-x86_64
+          path: dist/linux-x86_64
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/linux-x86_64/bundle.tar.gz
+            dist/linux-x86_64/manifest.json
+            dist/linux-x86_64/bundle.sha256
+            dist/linux-x86_64/af-bootstrap
+            dist/linux-x86_64/af-bootstrap.sha256

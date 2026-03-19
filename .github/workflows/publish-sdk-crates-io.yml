@@ -1,0 +1,58 @@
+name: Publish SDK To Crates.io
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish from tag."
+        required: true
+        type: string
+
+jobs:
+  publish-crates:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Tag
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish af-rpc-proto
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p af-rpc-proto --locked
+
+      - name: Publish af-rpc-transport
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          for attempt in 1 2 3; do
+            if cargo publish -p af-rpc-transport --locked; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            echo "af-rpc-transport publish failed, retrying in 20 seconds..."
+            sleep 20
+          done
+
+      - name: Publish af-sdk
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          for attempt in 1 2 3; do
+            if cargo publish -p af-sdk --locked; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            echo "af-sdk publish failed, retrying in 20 seconds..."
+            sleep 20
+          done

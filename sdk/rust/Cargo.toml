@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-af-rpc-proto = { path = "../../protocol/rpc-proto" }
-af-rpc-transport = { path = "../../protocol/rpc-transport" }
+af-rpc-proto = { version = "0.1.0", path = "../../protocol/rpc-proto" }
+af-rpc-transport = { version = "0.1.0", path = "../../protocol/rpc-transport" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 prost-types = { workspace = true }

@@ -146,6 +146,7 @@ version = "0.1.0"
 dependencies = [
  "af-rpc-proto",
  "af-rpc-transport",
+ "prost-types",
  "serde",
  "serde_json",
  "sha2",

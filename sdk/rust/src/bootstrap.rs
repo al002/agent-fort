@@ -1,3 +1,7 @@
+//! Bootstrap orchestration for daemon installation, sync, and startup.
+//!
+//! This module wraps the `af-bootstrap` binary lifecycle used by the SDK.
+
 use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Write};
@@ -28,49 +32,128 @@ const DEFAULT_ENDPOINT: &str = "npipe://agent-fortd";
 #[cfg(not(windows))]
 const DEFAULT_ENDPOINT: &str = "unix:///tmp/agent-fortd.sock";
 
+/// Bootstrap configuration for locating/downloading and running `af-bootstrap`.
+///
+/// # Example
+/// ```
+/// use af_sdk::{BootstrapConfig, default_endpoint_uri, default_install_root_path};
+///
+/// let config = BootstrapConfig {
+///     install_root: Some(default_install_root_path()),
+///     endpoint: Some(default_endpoint_uri().to_string()),
+///     ..Default::default()
+/// };
+/// assert!(config.install_root.is_some());
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct BootstrapConfig {
+    /// Bootstrap binary source.
+    ///
+    /// Supported forms:
+    /// - local path (absolute or relative),
+    /// - `file://` URL,
+    /// - `http://` / `https://` URL.
+    ///
+    /// When `None`, SDK uses the local development path convention.
     pub bootstrap_binary_url: Option<String>,
+    /// Installation root directory used by bootstrap commands.
+    ///
+    /// When `None`, platform-specific default is used.
     pub install_root: Option<PathBuf>,
+    /// Optional bundle manifest source for `sync`.
+    ///
+    /// If this is `None`, SDK falls back to local
+    /// [`default_manifest_path`](crate::default_manifest_path), that is
+    /// `<install_root>/manifest.json`.
+    ///
+    /// When that local file does not exist, `sync` fails with
+    /// [`crate::SdkError::BundleManifestRequired`].
+    ///
+    /// There is no built-in online default manifest URL. To use an online
+    /// manifest, pass an explicit `https://...` source here.
     pub bundle_manifest: Option<String>,
+    /// Daemon endpoint URI passed to bootstrap.
+    ///
+    /// When `None`, SDK uses [`default_endpoint_uri`].
     pub endpoint: Option<String>,
+    /// Policy directory passed to bootstrap `start`.
+    ///
+    /// If not provided, SDK checks `AF_POLICY_DIR` and then defaults to
+    /// `<current_dir>/policies`.
     pub policy_dir: Option<PathBuf>,
+    /// Optional store path passed to bootstrap `start`.
     pub store_path: Option<PathBuf>,
 }
 
+/// Combined result of `sync` + `start` bootstrap execution.
 #[derive(Debug, Clone)]
 pub struct BootstrapRunResult {
+    /// Resolved filesystem path to bootstrap executable.
     pub bootstrap_path: PathBuf,
+    /// Output of `sync` command.
     pub sync: Option<BootstrapSyncOutput>,
+    /// Output of `start` command.
     pub start: BootstrapStartOutput,
 }
 
+/// Result of running only bootstrap `sync`.
 #[derive(Debug, Clone)]
 pub struct BootstrapSyncResult {
+    /// Resolved filesystem path to bootstrap executable.
     pub bootstrap_path: PathBuf,
+    /// Output of `sync` command.
     pub sync: Option<BootstrapSyncOutput>,
 }
 
+/// Parsed JSON output from bootstrap `sync`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct BootstrapSyncOutput {
+    /// Success flag from bootstrap JSON output.
     pub ok: bool,
+    /// Bootstrap/daemon bundle version.
     pub version: String,
+    /// Installed daemon executable path.
     pub daemon_path: String,
+    /// Installed bubblewrap executable path.
     pub bwrap_path: String,
+    /// Installed helper executable path.
     pub helper_path: String,
+    /// Endpoint configured for daemon runtime.
     pub endpoint: String,
+    /// Installation state file path.
     pub install_state_path: String,
 }
 
+/// Parsed JSON output from bootstrap `start`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct BootstrapStartOutput {
+    /// Success flag from bootstrap JSON output.
     pub ok: bool,
+    /// Effective daemon endpoint.
     pub endpoint: String,
+    /// Whether bootstrap started the daemon in this invocation.
     pub started: bool,
+    /// Daemon process id when available.
     pub daemon_pid: Option<u32>,
+    /// Daemon instance identifier.
     pub daemon_instance_id: String,
 }
 
+/// Orchestrates bootstrap command execution.
+///
+/// Use this type when you need explicit control over whether to run full flow,
+/// `sync` only, or `start` only.
+///
+/// # Example
+/// ```no_run
+/// use af_sdk::{BootstrapConfig, BootstrapRunner, Result};
+///
+/// fn main() -> Result<()> {
+///     let runner = BootstrapRunner::new(BootstrapConfig::default());
+///     let _sync = runner.sync_only()?;
+///     Ok(())
+/// }
+/// ```
 #[derive(Debug, Clone)]
 pub struct BootstrapRunner {
     config: BootstrapConfig,
@@ -106,10 +189,19 @@ enum Source {
 }
 
 impl BootstrapRunner {
+    /// Creates a runner from bootstrap configuration.
     pub fn new(config: BootstrapConfig) -> Self {
         Self { config }
     }
 
+    /// Runs full prepare flow:
+    /// 1. Resolve bootstrap location (download if needed),
+    /// 2. Execute `sync`,
+    /// 3. Execute `start`.
+    ///
+    /// # Errors
+    /// Returns bootstrap resolution/download, process execution, JSON parsing,
+    /// endpoint validation, and I/O errors.
     pub fn prepare_and_start(&self) -> Result<BootstrapRunResult> {
         let resolved = self.resolve_config()?;
         let bootstrap_path = resolve_bootstrap_path(&resolved, true)?;
@@ -123,6 +215,13 @@ impl BootstrapRunner {
         })
     }
 
+    /// Runs bootstrap `sync` only.
+    ///
+    /// This command may download bootstrap binary when not found under install root.
+    ///
+    /// # Errors
+    /// Returns bootstrap resolution/download, process execution, JSON parsing,
+    /// endpoint validation, and I/O errors.
     pub fn sync_only(&self) -> Result<BootstrapSyncResult> {
         let resolved = self.resolve_config()?;
         let bootstrap_path = resolve_bootstrap_path(&resolved, true)?;
@@ -133,6 +232,13 @@ impl BootstrapRunner {
         })
     }
 
+    /// Runs bootstrap `start` only.
+    ///
+    /// Unlike [`Self::prepare_and_start`], this method does not download bootstrap
+    /// when the binary is missing from install root.
+    ///
+    /// # Errors
+    /// Returns bootstrap execution, endpoint validation, and I/O errors.
     pub fn start_only(&self) -> Result<BootstrapStartOutput> {
         let resolved = self.resolve_config()?;
         let bootstrap_path = resolve_bootstrap_path(&resolved, false)?;
@@ -632,22 +738,74 @@ fn default_install_root() -> PathBuf {
     }
 }
 
+/// Returns default install root path used by bootstrap when not explicitly configured.
+///
+/// # Example
+/// ```
+/// use af_sdk::default_install_root_path;
+///
+/// let install_root = default_install_root_path();
+/// assert!(!install_root.as_os_str().is_empty());
+/// ```
 pub fn default_install_root_path() -> PathBuf {
     default_install_root()
 }
 
+/// Returns default policy directory path (`<current_dir>/policies`).
+///
+/// # Example
+/// ```
+/// use af_sdk::default_policy_dir_path;
+///
+/// let policy_dir = default_policy_dir_path();
+/// assert!(!policy_dir.as_os_str().is_empty());
+/// ```
 pub fn default_policy_dir_path() -> PathBuf {
     default_policy_dir()
 }
 
+/// Returns default local manifest path (`<install_root>/manifest.json`).
+///
+/// This is the SDK's fallback manifest source when
+/// [`BootstrapConfig::bundle_manifest`] is not provided.
+/// It is a filesystem path, not an online URL.
+///
+/// # Example
+/// ```
+/// use af_sdk::{default_install_root_path, default_manifest_path};
+///
+/// let install_root = default_install_root_path();
+/// let manifest = default_manifest_path(&install_root);
+/// assert!(manifest.ends_with("manifest.json"));
+/// ```
 pub fn default_manifest_path(install_root: &Path) -> PathBuf {
     install_root_manifest_path(install_root)
 }
 
+/// Returns SDK default daemon endpoint URI.
+///
+/// # Example
+/// ```
+/// use af_sdk::default_endpoint_uri;
+///
+/// let endpoint = default_endpoint_uri();
+/// assert!(!endpoint.is_empty());
+/// ```
 pub fn default_endpoint_uri() -> &'static str {
     DEFAULT_ENDPOINT
 }
 
+/// Returns bootstrap binary lookup order under a given install root.
+///
+/// This can be used for diagnostics when `BootstrapNotFound` is returned.
+///
+/// # Example
+/// ```
+/// use af_sdk::{bootstrap_path_lookup_order_hint, default_install_root_path};
+///
+/// let order = bootstrap_path_lookup_order_hint(&default_install_root_path());
+/// assert!(!order.is_empty());
+/// ```
 pub fn bootstrap_path_lookup_order_hint(install_root: &Path) -> Vec<PathBuf> {
     let mut order = Vec::new();
     for name in bootstrap_binary_names() {
@@ -657,6 +815,15 @@ pub fn bootstrap_path_lookup_order_hint(install_root: &Path) -> Vec<PathBuf> {
     order
 }
 
+/// Returns `true` if install root contains `manifest.json`.
+///
+/// # Example
+/// ```
+/// use af_sdk::{default_install_root_path, install_root_has_manifest};
+///
+/// let has_manifest = install_root_has_manifest(&default_install_root_path());
+/// let _ = has_manifest;
+/// ```
 pub fn install_root_has_manifest(install_root: &Path) -> bool {
     fs::metadata(install_root_manifest_path(install_root))
         .map(|meta| meta.is_file())

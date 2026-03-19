@@ -61,15 +61,14 @@ use prost_types::{value::Kind as ProstValueKind, Struct as ProstStruct, Value as
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut config = SdkConfig::new("demo-agent");
-    config.bootstrap = BootstrapConfig {
-        bootstrap_binary_url: Some("./target/debug/af-bootstrap".into()),
-        install_root: Some("./.runtime/install-root".into()),
-        bundle_manifest: Some("./assets/agent-fortd/linux-x86_64/manifest.json".into()),
-        endpoint: Some("unix:///tmp/agent-fortd.sock".into()),
-        policy_dir: Some("./policies".into()),
-        store_path: Some("./.runtime/agent-fortd.sqlite3".into()),
-    };
+    let config = SdkConfig::new(
+        "demo-agent",
+        Some(BootstrapConfig {
+            bootstrap_binary_url: Some("./target/debug/af-bootstrap".into()),
+            bundle_manifest: Some("./assets/agent-fortd/linux-x86_64/manifest.json".into()),
+            ..Default::default(),
+        }),
+    );
 
     AgentFortClient::initialize(config.clone()).await?;
     let mut client = AgentFortClient::connect(config).await?;

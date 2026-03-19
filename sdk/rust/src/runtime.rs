@@ -10,9 +10,16 @@ use uuid::Uuid;
 
 use crate::error::{Result, SdkError};
 
+/// Options for `CreateSession` RPC calls.
 #[derive(Debug, Clone)]
 pub struct CreateSessionOptions {
+    /// Agent name for the created session.
+    ///
+    /// When omitted, [`RuntimeClient`] uses the name passed to [`RuntimeClient::connect`].
     pub agent_name: Option<String>,
+    /// Session lease TTL in seconds.
+    ///
+    /// When omitted, runtime defaults to `300` seconds.
     pub lease_ttl_secs: Option<u64>,
 }
 
@@ -26,6 +33,16 @@ impl Default for CreateSessionOptions {
 }
 
 impl CreateSessionOptions {
+    /// Creates options with a specific agent name and default lease TTL behavior.
+    ///
+    /// # Examples
+    /// ```
+    /// use af_sdk::CreateSessionOptions;
+    ///
+    /// let options = CreateSessionOptions::with_agent_name("worker");
+    /// assert_eq!(options.agent_name.as_deref(), Some("worker"));
+    /// assert_eq!(options.lease_ttl_secs, None);
+    /// ```
     pub fn with_agent_name(agent_name: impl Into<String>) -> Self {
         Self {
             agent_name: Some(agent_name.into()),
@@ -34,6 +51,12 @@ impl CreateSessionOptions {
     }
 }
 
+/// Low-level runtime RPC client.
+///
+/// This type directly maps to daemon RPC methods and exposes protocol-native
+/// request/response types.
+///
+/// Prefer [`crate::AgentFortClient`] for automatic bootstrap/reconnect behavior.
 #[derive(Debug)]
 pub struct RuntimeClient {
     endpoint: Endpoint,
@@ -43,6 +66,25 @@ pub struct RuntimeClient {
 }
 
 impl RuntimeClient {
+    /// Connects to a daemon endpoint and initializes client identity.
+    ///
+    /// `session_agent_name` becomes the default session agent name for
+    /// [`Self::create_session`] calls that do not override it via
+    /// [`CreateSessionOptions`].
+    ///
+    /// # Errors
+    /// Returns endpoint parsing or transport connection errors.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use af_sdk::{Result, RuntimeClient};
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<()> {
+    ///     let _runtime = RuntimeClient::connect("unix:///tmp/agent-fortd.sock", "my-agent").await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn connect(
         endpoint_raw: &str,
         session_agent_name: impl Into<String>,
@@ -57,14 +99,22 @@ impl RuntimeClient {
         })
     }
 
+    /// Returns the parsed daemon endpoint for this connection.
     pub fn endpoint(&self) -> &Endpoint {
         &self.endpoint
     }
 
+    /// Returns stable client instance ID generated at connection time.
+    ///
+    /// This value is reused across all RPC calls made through this runtime client.
     pub fn client_instance_id(&self) -> &str {
         &self.client_instance_id
     }
 
+    /// Sends `Ping` RPC and returns daemon version/status payload.
+    ///
+    /// # Errors
+    /// Returns transport, RPC, or protocol decode errors.
     pub async fn ping(&mut self) -> Result<PingResponse> {
         let payload = self
             .call_rpc(RpcMethod::Ping, encode_message(&PingRequest {}))
@@ -73,6 +123,24 @@ impl RuntimeClient {
             .map_err(|error| SdkError::Protocol(format!("decode PingResponse failed: {error}")))
     }
 
+    /// Creates a new session.
+    ///
+    /// The request always carries this runtime's `client_instance_id`.
+    ///
+    /// # Errors
+    /// Returns transport, RPC, or protocol decode errors.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use af_sdk::{CreateSessionOptions, Result, RuntimeClient};
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<()> {
+    ///     let mut runtime = RuntimeClient::connect("unix:///tmp/agent-fortd.sock", "my-agent").await?;
+    ///     let _resp = runtime.create_session(CreateSessionOptions::default()).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn create_session(
         &mut self,
         options: CreateSessionOptions,
@@ -92,6 +160,10 @@ impl RuntimeClient {
         })
     }
 
+    /// Creates a task under an existing session.
+    ///
+    /// # Errors
+    /// Returns transport, RPC, or protocol decode errors.
     pub async fn create_task(
         &mut self,
         session_id: String,
@@ -116,6 +188,10 @@ impl RuntimeClient {
         })
     }
 
+    /// Fetches an approval object by approval ID.
+    ///
+    /// # Errors
+    /// Returns transport, RPC, or protocol decode errors.
     pub async fn get_approval(
         &mut self,
         session_id: String,
@@ -136,6 +212,13 @@ impl RuntimeClient {
         })
     }
 
+    /// Submits an approval decision.
+    ///
+    /// `idempotency_key` should be unique per logical decision operation to support
+    /// safe retries.
+    ///
+    /// # Errors
+    /// Returns transport, RPC, or protocol decode errors.
     pub async fn respond_approval(
         &mut self,
         session_id: String,

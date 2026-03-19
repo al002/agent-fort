@@ -232,16 +232,17 @@ impl ExampleSdkParams {
     }
 
     fn to_sdk_config(&self) -> SdkConfig {
-        let mut config = SdkConfig::new(self.agent_name.clone());
-        config.bootstrap = BootstrapConfig {
-            bootstrap_binary_url: Some(self.bootstrap_binary_url.clone()),
-            install_root: Some(self.install_root.clone()),
-            bundle_manifest: Some(self.bundle_manifest.clone()),
-            endpoint: self.endpoint.clone(),
-            policy_dir: Some(self.policy_dir.clone()),
-            store_path: Some(self.store_path.clone()),
-        };
-        config
+        SdkConfig::new(
+            self.agent_name.clone(),
+            Some(BootstrapConfig {
+                bootstrap_binary_url: Some(self.bootstrap_binary_url.clone()),
+                install_root: Some(self.install_root.clone()),
+                bundle_manifest: Some(self.bundle_manifest.clone()),
+                endpoint: self.endpoint.clone(),
+                policy_dir: Some(self.policy_dir.clone()),
+                store_path: Some(self.store_path.clone()),
+            }),
+        )
     }
 }
 

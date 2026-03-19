@@ -1,5 +1,6 @@
 mod command;
 mod start;
+mod stop;
 mod sync;
 
 use command::{BootstrapCommand, Cli, ErrorOutput, ParseOutcome};
@@ -30,6 +31,8 @@ fn main() {
             .map(|output| serde_json::to_string_pretty(&output).expect("serialize sync output")),
         BootstrapCommand::Start(args) => start::run(args)
             .map(|output| serde_json::to_string_pretty(&output).expect("serialize start output")),
+        BootstrapCommand::Stop(args) => stop::run(args)
+            .map(|output| serde_json::to_string_pretty(&output).expect("serialize stop output")),
     };
 
     match result {

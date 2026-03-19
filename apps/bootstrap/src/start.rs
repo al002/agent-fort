@@ -1,3 +1,4 @@
+use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -9,7 +10,9 @@ use af_rpc_proto::{PingRequest, PingResponse, RpcMethod, RpcRequest, RpcResponse
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
-use crate::command::{InstallState, StartArgs, resolve_endpoint, resolve_install_root};
+use crate::command::{
+    InstallState, StartArgs, daemon_pid_file_path, resolve_endpoint, resolve_install_root,
+};
 
 const MAX_FRAME_LEN: usize = 8 * 1024 * 1024;
 const IO_TIMEOUT_MS: u64 = 500;
@@ -64,6 +67,7 @@ pub fn run(args: StartArgs) -> Result<StartOutput> {
     let poll_interval = Duration::from_millis(args.ping_interval_ms.max(10));
     loop {
         if let Ok(response) = ping_once(&endpoint) {
+            persist_daemon_pid(&install_root, daemon_pid)?;
             return Ok(StartOutput {
                 ok: true,
                 endpoint,
@@ -81,6 +85,12 @@ pub fn run(args: StartArgs) -> Result<StartOutput> {
         }
         sleep(poll_interval);
     }
+}
+
+fn persist_daemon_pid(install_root: &Path, daemon_pid: u32) -> Result<()> {
+    let pid_path = daemon_pid_file_path(install_root);
+    fs::write(&pid_path, format!("{daemon_pid}\n"))
+        .with_context(|| format!("write daemon pid file {}", pid_path.display()))
 }
 
 fn ping_once(endpoint: &str) -> Result<PingResponse> {

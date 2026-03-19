@@ -11,6 +11,7 @@ pub const DEFAULT_ENDPOINT: &str = "npipe://agent-fortd";
 #[cfg(not(windows))]
 pub const DEFAULT_ENDPOINT: &str = "/tmp/agent-fortd.sock";
 const INSTALL_STATE_FILE: &str = "install-state.json";
+const DAEMON_PID_FILE: &str = "daemon.pid";
 
 pub struct Cli {
     pub command: BootstrapCommand,
@@ -19,6 +20,7 @@ pub struct Cli {
 pub enum BootstrapCommand {
     Sync(SyncArgs),
     Start(StartArgs),
+    Stop(StopArgs),
 }
 
 #[derive(Debug, Clone)]
@@ -41,6 +43,13 @@ pub struct StartArgs {
     pub store_path: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone)]
+pub struct StopArgs {
+    pub install_root: Option<PathBuf>,
+    pub endpoint: Option<String>,
+    pub shutdown_timeout_ms: u64,
+}
+
 pub enum ParseOutcome {
     Run(Cli),
     Help(String),
@@ -58,6 +67,7 @@ impl Cli {
             "help" | "-h" | "--help" => Ok(ParseOutcome::Help(root_help_text())),
             "sync" => parse_sync(&args[1..]),
             "start" => parse_start(&args[1..]),
+            "stop" => parse_stop(&args[1..]),
             other => bail!("unknown command `{other}`"),
         }
     }
@@ -256,6 +266,46 @@ fn parse_start(args: &[String]) -> Result<ParseOutcome> {
     }))
 }
 
+fn parse_stop(args: &[String]) -> Result<ParseOutcome> {
+    if contains_help(args) {
+        return Ok(ParseOutcome::Help(stop_help_text()));
+    }
+
+    let mut parsed = StopArgs {
+        install_root: None,
+        endpoint: None,
+        shutdown_timeout_ms: 3_000,
+    };
+
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--install-root" => {
+                let (value, next) = parse_value(args, i, "--install-root")?;
+                parsed.install_root = Some(PathBuf::from(value));
+                i = next;
+            }
+            "--endpoint" => {
+                let (value, next) = parse_value(args, i, "--endpoint")?;
+                parsed.endpoint = Some(value);
+                i = next;
+            }
+            "--shutdown-timeout-ms" => {
+                let (value, next) = parse_value(args, i, "--shutdown-timeout-ms")?;
+                parsed.shutdown_timeout_ms = value.parse::<u64>().with_context(|| {
+                    format!("parse --shutdown-timeout-ms value `{value}` as u64")
+                })?;
+                i = next;
+            }
+            other => bail!("unknown option for `stop`: `{other}`"),
+        }
+    }
+
+    Ok(ParseOutcome::Run(Cli {
+        command: BootstrapCommand::Stop(parsed),
+    }))
+}
+
 fn parse_value(args: &[String], index: usize, flag: &str) -> Result<(String, usize)> {
     let value = args
         .get(index + 1)
@@ -269,7 +319,7 @@ fn contains_help(args: &[String]) -> bool {
 }
 
 fn root_help_text() -> String {
-    "Prepare assets and start the local daemon\n\nUsage:\n  af-bootstrap <command> [options]\n\nCommands:\n  sync\n  start\n  help\n\nRun `af-bootstrap <command> --help` for command options.".to_string()
+    "Prepare assets and manage the local daemon\n\nUsage:\n  af-bootstrap <command> [options]\n\nCommands:\n  sync\n  start\n  stop\n  help\n\nRun `af-bootstrap <command> --help` for command options.".to_string()
 }
 
 fn sync_help_text() -> String {
@@ -279,6 +329,11 @@ fn sync_help_text() -> String {
 
 fn start_help_text() -> String {
     "Usage: af-bootstrap start [OPTIONS]\n\nOptions:\n  --install-root <PATH>\n  --endpoint <ENDPOINT>\n  --startup-timeout-ms <MILLIS> (default: 10000)\n  --ping-interval-ms <MILLIS> (default: 200)\n  --daemon-path <PATH>\n  --bwrap-path <PATH>\n  --helper-path <PATH>\n  --policy-dir <PATH>\n  --store-path <PATH>\n  -h, --help"
+        .to_string()
+}
+
+fn stop_help_text() -> String {
+    "Usage: af-bootstrap stop [OPTIONS]\n\nOptions:\n  --install-root <PATH>\n  --endpoint <ENDPOINT>\n  --shutdown-timeout-ms <MILLIS> (default: 3000)\n  -h, --help"
         .to_string()
 }
 
@@ -306,4 +361,8 @@ fn default_install_root() -> PathBuf {
             .unwrap_or_else(|| PathBuf::from("."));
         home.join(".local").join("share").join("agent-fort")
     }
+}
+
+pub fn daemon_pid_file_path(install_root: &Path) -> PathBuf {
+    install_root.join(DAEMON_PID_FILE)
 }

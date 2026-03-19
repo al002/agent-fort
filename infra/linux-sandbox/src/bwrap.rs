@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use af_sandbox::{
-    FilesystemMode, FilesystemPolicy, NetworkPolicy, SandboxError, SandboxExecRequest,
+    BindMount, FilesystemMode, FilesystemPolicy, NetworkPolicy, SandboxError, SandboxExecRequest,
     SandboxResult,
 };
 
@@ -18,7 +18,9 @@ const LINUX_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
 ];
 
 pub(crate) fn should_wrap_with_bwrap(request: &SandboxExecRequest) -> bool {
-    request.filesystem.mode != FilesystemMode::FullAccess || request.network != NetworkPolicy::Full
+    request.filesystem.mode != FilesystemMode::FullAccess
+        || request.network != NetworkPolicy::Full
+        || !request.filesystem.mounts.is_empty()
 }
 
 pub(crate) fn build_bwrap_args(request: &SandboxExecRequest) -> SandboxResult<Vec<String>> {
@@ -101,12 +103,39 @@ fn append_filesystem_args(args: &mut Vec<String>, policy: &FilesystemPolicy) -> 
         }
     }
 
+    append_mount_args(args, &policy.mounts)?;
+
     let mut unreadable_roots = policy.unreadable_roots.clone();
     unreadable_roots.sort_by_key(|path| depth(path.as_path()));
     for unreadable_root in unreadable_roots {
         append_unreadable_path(args, unreadable_root.as_path(), &allowed_write_paths);
     }
 
+    Ok(())
+}
+
+fn append_mount_args(args: &mut Vec<String>, mounts: &[BindMount]) -> SandboxResult<()> {
+    for mount in mounts {
+        if !mount.source.exists() {
+            return Err(SandboxError::InvalidRequest(format!(
+                "mount source does not exist: {}",
+                mount.source.display()
+            )));
+        }
+        if !mount.source.is_dir() {
+            return Err(SandboxError::InvalidRequest(format!(
+                "mount source must be a directory: {}",
+                mount.source.display()
+            )));
+        }
+        if mount.read_only {
+            args.push("--ro-bind".to_string());
+        } else {
+            args.push("--bind".to_string());
+        }
+        args.push(path_to_string(&mount.source));
+        args.push(path_to_string(&mount.target));
+    }
     Ok(())
 }
 
@@ -222,7 +251,7 @@ mod tests {
     use std::path::PathBuf;
 
     use af_sandbox::{
-        FilesystemMode, FilesystemPolicy, NetworkPolicy, OutputCapturePolicy, PtyPolicy,
+        BindMount, FilesystemMode, FilesystemPolicy, NetworkPolicy, OutputCapturePolicy, PtyPolicy,
         ResourceGovernanceMode, ResourceLimits, SandboxExecRequest, SyscallPolicy, TraceContext,
         WritableRoot,
     };
@@ -240,6 +269,7 @@ mod tests {
                 mount_proc: true,
                 readable_roots: vec![],
                 writable_roots: vec![],
+                mounts: vec![],
                 unreadable_roots: vec![],
             },
             network: NetworkPolicy::Disabled,
@@ -267,6 +297,19 @@ mod tests {
         request.filesystem.mode = FilesystemMode::FullAccess;
         request.network = NetworkPolicy::Full;
         assert!(!should_wrap_with_bwrap(&request));
+    }
+
+    #[test]
+    fn full_access_full_network_with_mounts_requires_bwrap() {
+        let mut request = base_request();
+        request.filesystem.mode = FilesystemMode::FullAccess;
+        request.network = NetworkPolicy::Full;
+        request.filesystem.mounts = vec![BindMount {
+            source: PathBuf::from("/tmp"),
+            target: PathBuf::from("/mnt/host-tmp"),
+            read_only: true,
+        }];
+        assert!(should_wrap_with_bwrap(&request));
     }
 
     #[test]
@@ -319,6 +362,23 @@ mod tests {
         assert!(
             args.windows(3)
                 .any(|window| window == ["--ro-bind", "/dev/null", "/tmp/af-missing-ro"])
+        );
+    }
+
+    #[test]
+    fn custom_read_only_mount_is_emitted() {
+        let mut request = base_request();
+        request.filesystem.mode = FilesystemMode::Restricted;
+        request.filesystem.mounts = vec![BindMount {
+            source: PathBuf::from("/tmp"),
+            target: PathBuf::from("/mnt/host-tmp"),
+            read_only: true,
+        }];
+
+        let args = build_bwrap_args(&request).expect("build bwrap args");
+        assert!(
+            args.windows(3)
+                .any(|window| window == ["--ro-bind", "/tmp", "/mnt/host-tmp"])
         );
     }
 }

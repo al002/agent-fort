@@ -541,6 +541,7 @@ mod tests {
                 mount_proc: true,
                 readable_roots: vec![],
                 writable_roots: vec![],
+                mounts: vec![],
                 unreadable_roots: vec![],
             },
             network: NetworkPolicy::Full,

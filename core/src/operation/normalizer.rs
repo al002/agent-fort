@@ -10,17 +10,7 @@ use super::{
 };
 
 const DEFAULT_SYSTEM_ROOTS: &[&str] = &[
-    "/",
-    "/etc",
-    "/usr",
-    "/bin",
-    "/sbin",
-    "/lib",
-    "/lib64",
-    "/boot",
-    "/proc",
-    "/sys",
-    "/dev",
+    "/", "/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/boot", "/proc", "/sys", "/dev",
     "/var",
 ];
 

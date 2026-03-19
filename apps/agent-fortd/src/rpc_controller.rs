@@ -31,7 +31,7 @@ use af_rpc_proto::{
 };
 use af_rpc_transport::{RpcConnection, TransportError};
 use af_sandbox::{
-    FilesystemMode, FilesystemPolicy, NetworkPolicy, OutputCapturePolicy, PtyPolicy,
+    BindMount, FilesystemMode, FilesystemPolicy, NetworkPolicy, OutputCapturePolicy, PtyPolicy,
     ResourceGovernanceMode, ResourceLimits, SandboxExecRequest, SandboxExecResult,
     SandboxExitStatus, SyscallPolicy, TraceContext, WritableRoot,
 };
@@ -1027,6 +1027,7 @@ fn build_sandbox_request(
                 root: sandbox_root,
                 read_only_subpaths: Vec::new(),
             }],
+            mounts: sandbox_overrides.mounts,
             unreadable_roots: Vec::new(),
         },
         network,
@@ -1110,6 +1111,7 @@ struct SandboxOverrides {
     filesystem_mode: Option<FilesystemMode>,
     include_platform_defaults: Option<bool>,
     mount_proc: Option<bool>,
+    mounts: Vec<BindMount>,
     governance_mode: Option<ResourceGovernanceMode>,
     syscall_policy: Option<SyscallPolicy>,
 }
@@ -1172,6 +1174,9 @@ fn parse_sandbox_overrides(parsed: Option<&Value>) -> Result<SandboxOverrides, R
         })?;
         overrides.mount_proc = Some(flag);
     }
+    if let Some(value) = sandbox_object.get("mounts") {
+        overrides.mounts = parse_sandbox_mounts(value)?;
+    }
     if let Some(value) = sandbox_object.get("governance_mode") {
         let text = value.as_str().ok_or_else(|| {
             err(
@@ -1192,6 +1197,85 @@ fn parse_sandbox_overrides(parsed: Option<&Value>) -> Result<SandboxOverrides, R
     }
 
     Ok(overrides)
+}
+
+fn parse_sandbox_mounts(value: &Value) -> Result<Vec<BindMount>, RpcResponse> {
+    let mounts = value.as_array().ok_or_else(|| {
+        err(
+            RpcErrorCode::BadRequest,
+            "limits_json.sandbox.mounts must be an array",
+        )
+    })?;
+    let mut parsed = Vec::with_capacity(mounts.len());
+    for (index, mount) in mounts.iter().enumerate() {
+        let mount_obj = mount.as_object().ok_or_else(|| {
+            err(
+                RpcErrorCode::BadRequest,
+                format!("limits_json.sandbox.mounts[{index}] must be an object"),
+            )
+        })?;
+        let source = mount_obj
+            .get("source")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                err(
+                    RpcErrorCode::BadRequest,
+                    format!(
+                        "limits_json.sandbox.mounts[{index}].source must be a non-empty string"
+                    ),
+                )
+            })?;
+        if source.trim().is_empty() {
+            return Err(err(
+                RpcErrorCode::BadRequest,
+                format!("limits_json.sandbox.mounts[{index}].source must not be empty"),
+            ));
+        }
+        if !Path::new(source).is_absolute() {
+            return Err(err(
+                RpcErrorCode::BadRequest,
+                format!("limits_json.sandbox.mounts[{index}].source must be an absolute path"),
+            ));
+        }
+        let target = mount_obj
+            .get("target")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                err(
+                    RpcErrorCode::BadRequest,
+                    format!(
+                        "limits_json.sandbox.mounts[{index}].target must be a non-empty string"
+                    ),
+                )
+            })?;
+        if target.trim().is_empty() {
+            return Err(err(
+                RpcErrorCode::BadRequest,
+                format!("limits_json.sandbox.mounts[{index}].target must not be empty"),
+            ));
+        }
+        if !Path::new(target).is_absolute() {
+            return Err(err(
+                RpcErrorCode::BadRequest,
+                format!("limits_json.sandbox.mounts[{index}].target must be an absolute path"),
+            ));
+        }
+        let read_only = match mount_obj.get("read_only") {
+            Some(raw) => raw.as_bool().ok_or_else(|| {
+                err(
+                    RpcErrorCode::BadRequest,
+                    format!("limits_json.sandbox.mounts[{index}].read_only must be a boolean"),
+                )
+            })?,
+            None => true,
+        };
+        parsed.push(BindMount {
+            source: PathBuf::from(source),
+            target: PathBuf::from(target),
+            read_only,
+        });
+    }
+    Ok(parsed)
 }
 
 fn parse_network_policy(value: &str) -> Result<NetworkPolicy, RpcResponse> {
@@ -2656,6 +2740,13 @@ mod tests {
                 "filesystem_mode": "read_only",
                 "include_platform_defaults": false,
                 "mount_proc": false,
+                "mounts": [
+                    {
+                        "source": "/opt/models",
+                        "target": "/mnt/models",
+                        "read_only": false
+                    }
+                ],
                 "governance_mode": "required",
                 "syscall_policy": "unconfined"
             }
@@ -2666,6 +2757,14 @@ mod tests {
         assert_eq!(overrides.filesystem_mode, Some(FilesystemMode::ReadOnly));
         assert_eq!(overrides.include_platform_defaults, Some(false));
         assert_eq!(overrides.mount_proc, Some(false));
+        assert_eq!(
+            overrides.mounts,
+            vec![BindMount {
+                source: PathBuf::from("/opt/models"),
+                target: PathBuf::from("/mnt/models"),
+                read_only: false,
+            }]
+        );
         assert_eq!(
             overrides.governance_mode,
             Some(ResourceGovernanceMode::Required)
@@ -2687,6 +2786,25 @@ mod tests {
         };
         assert_eq!(rpc_error.code, RpcErrorCode::BadRequest as i32);
         assert!(rpc_error.message.contains("sandbox.network"));
+    }
+
+    #[test]
+    fn parse_sandbox_overrides_rejects_invalid_mounts_shape() {
+        let parsed = json!({
+            "sandbox": {
+                "mounts": {
+                    "source": "/opt/models",
+                    "target": "/mnt/models"
+                }
+            }
+        });
+        let response = parse_sandbox_overrides(Some(&parsed)).expect_err("mounts object must fail");
+        let rpc_error = match response.outcome {
+            Some(rpc_response::Outcome::Error(error)) => error,
+            other => panic!("expected rpc error response, got {other:?}"),
+        };
+        assert_eq!(rpc_error.code, RpcErrorCode::BadRequest as i32);
+        assert!(rpc_error.message.contains("sandbox.mounts"));
     }
 
     #[test]

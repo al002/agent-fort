@@ -826,7 +826,10 @@ fn draw_messages(frame: &mut Frame<'_>, area: ratatui::layout::Rect, app: &mut A
     frame.render_widget(widget, area);
 }
 
-fn build_wrapped_conversation_lines(messages: &[Message], content_width: usize) -> Vec<Line<'static>> {
+fn build_wrapped_conversation_lines(
+    messages: &[Message],
+    content_width: usize,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for message in messages {
         match message.role {

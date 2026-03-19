@@ -59,12 +59,20 @@ pub struct WritableRoot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BindMount {
+    pub source: PathBuf,
+    pub target: PathBuf,
+    pub read_only: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FilesystemPolicy {
     pub mode: FilesystemMode,
     pub include_platform_defaults: bool,
     pub mount_proc: bool,
     pub readable_roots: Vec<PathBuf>,
     pub writable_roots: Vec<WritableRoot>,
+    pub mounts: Vec<BindMount>,
     pub unreadable_roots: Vec<PathBuf>,
 }
 
@@ -76,6 +84,7 @@ impl Default for FilesystemPolicy {
             mount_proc: true,
             readable_roots: Vec::new(),
             writable_roots: Vec::new(),
+            mounts: Vec::new(),
             unreadable_roots: Vec::new(),
         }
     }
@@ -247,6 +256,14 @@ impl SandboxExecRequest {
                         root.root.display()
                     )));
                 }
+            }
+        }
+        for mount in &self.filesystem.mounts {
+            if !mount.source.is_absolute() {
+                return invalid_absolute_path("mounts.source", &mount.source);
+            }
+            if !mount.target.is_absolute() {
+                return invalid_absolute_path("mounts.target", &mount.target);
             }
         }
         Ok(())
@@ -421,6 +438,7 @@ mod tests {
                     root: PathBuf::from("/tmp/work"),
                     read_only_subpaths: vec![PathBuf::from("/tmp/other")],
                 }],
+                mounts: vec![],
                 unreadable_roots: vec![],
             },
             network: NetworkPolicy::Disabled,
@@ -472,6 +490,7 @@ mod tests {
                     root: PathBuf::from("/tmp/work"),
                     read_only_subpaths: vec![PathBuf::from("/tmp/work/../escape")],
                 }],
+                mounts: vec![],
                 unreadable_roots: vec![],
             },
             network: NetworkPolicy::Disabled,
@@ -484,5 +503,37 @@ mod tests {
         };
         let err = request.validate().expect_err("request should be invalid");
         assert!(err.to_string().contains("must stay under writable root"));
+    }
+
+    #[test]
+    fn rejects_relative_mount_source() {
+        let request = SandboxExecRequest {
+            command: vec!["/bin/true".to_string()],
+            cwd: PathBuf::from("/tmp"),
+            env: BTreeMap::new(),
+            filesystem: FilesystemPolicy {
+                mode: FilesystemMode::Restricted,
+                include_platform_defaults: true,
+                mount_proc: true,
+                readable_roots: vec![],
+                writable_roots: vec![],
+                mounts: vec![BindMount {
+                    source: PathBuf::from("relative/source"),
+                    target: PathBuf::from("/mnt/source"),
+                    read_only: true,
+                }],
+                unreadable_roots: vec![],
+            },
+            network: NetworkPolicy::Disabled,
+            pty: PtyPolicy::Disabled,
+            limits: ResourceLimits::default(),
+            governance_mode: ResourceGovernanceMode::BestEffort,
+            syscall_policy: SyscallPolicy::Unconfined,
+            capture: OutputCapturePolicy::default(),
+            trace: TraceContext::default(),
+        };
+
+        let err = request.validate().expect_err("request should be invalid");
+        assert!(err.to_string().contains("mounts.source"));
     }
 }

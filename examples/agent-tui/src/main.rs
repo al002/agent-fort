@@ -329,7 +329,7 @@ impl CommandExecutor {
                     rebind_token.clone(),
                     build_exec_operation(&command),
                     Some(format!("exec: {command}")),
-                    None,
+                    Some(sandbox_network_and_dns_limits_json()),
                 )
                 .await?
         };
@@ -565,6 +565,12 @@ fn build_exec_operation(command: &str) -> TaskOperation {
         options: None,
         labels: HashMap::new(),
     }
+}
+
+fn sandbox_network_and_dns_limits_json() -> String {
+    // Keep network enabled and mount /etc + /mnt for DNS-related configuration files.
+    r#"{"sandbox":{"network":"full","mounts":[{"source":"/etc","target":"/etc","read_only":true},{"source":"/mnt","target":"/mnt","read_only":true}]}}"#
+        .to_string()
 }
 
 fn agent_tui_root() -> PathBuf {

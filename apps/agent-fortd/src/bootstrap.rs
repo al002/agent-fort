@@ -29,17 +29,23 @@ impl BootstrappedDaemon {
             "sqlite store ready"
         );
 
-        let policy_runtime = Arc::new(Mutex::new(PolicyRuntime::start(PolicyRuntimeConfig::new(
-            config.policy_dir.clone(),
-        ))?));
+        let policy_runtime = Arc::new(Mutex::new(PolicyRuntime::start(
+            PolicyRuntimeConfig::new(config.policy_dir.clone()).with_command_rules(
+                config.command_rules_dir.clone(),
+                config.command_rules_strict,
+            ),
+        )?));
         let policy_status = policy_runtime
             .lock()
             .expect("policy runtime lock should not be poisoned")
             .status()?;
         info!(
             policy_dir = %config.policy_dir.display(),
+            command_rules_dir = %config.command_rules_dir.display(),
+            command_rules_strict = config.command_rules_strict,
             runtime_revision = policy_status.revision,
             policy_revision = policy_status.policy_revision,
+            command_rules_count = policy_status.command_rules_count,
             "policy directory runtime ready"
         );
 
@@ -78,6 +84,8 @@ impl BootstrappedDaemon {
             bwrap_path = %self.config.bwrap_path.display(),
             resource_governance_mode = ?self.config.resource_governance_mode,
             policy_dir = %self.config.policy_dir.display(),
+            command_rules_dir = %self.config.command_rules_dir.display(),
+            command_rules_strict = self.config.command_rules_strict,
             "agent-fortd started"
         );
         self.server.run().await

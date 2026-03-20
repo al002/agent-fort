@@ -13,6 +13,8 @@ pub struct RequestedCapabilities {
     pub credential_access: bool,
     pub unknown: bool,
     pub reason_codes: Vec<String>,
+    pub matched_rules: Vec<String>,
+    pub risk_tags: Vec<String>,
 }
 
 impl RequestedCapabilities {
@@ -27,8 +29,14 @@ impl RequestedCapabilities {
         self.credential_access |= other.credential_access;
         self.unknown |= other.unknown;
         self.reason_codes.append(&mut other.reason_codes);
+        self.matched_rules.append(&mut other.matched_rules);
+        self.risk_tags.append(&mut other.risk_tags);
         self.reason_codes.sort();
         self.reason_codes.dedup();
+        self.matched_rules.sort();
+        self.matched_rules.dedup();
+        self.risk_tags.sort();
+        self.risk_tags.dedup();
     }
 
     pub fn is_unknown_sensitive(&self) -> bool {

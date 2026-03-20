@@ -1,10 +1,16 @@
+mod command_rule_loader;
+mod command_rule_parser;
 mod runtime;
 mod source;
 mod static_policy_parser;
 mod watcher;
 
+pub use command_rule_loader::{CommandRuleLoader, LoadedCommandRules};
+pub use command_rule_parser::CommandRuleParser;
 pub use runtime::{ActivePolicy, PolicyRuntime};
-pub use source::{DEFAULT_POLL_INTERVAL, PolicyReloadError, PolicyRuntimeConfig, PolicyStatus};
+pub use source::{
+    CommandRulesConfig, DEFAULT_POLL_INTERVAL, PolicyReloadError, PolicyRuntimeConfig, PolicyStatus,
+};
 pub use static_policy_parser::{LoadedPolicy, StaticPolicyParser};
 pub use watcher::PolicyDirectoryWatcher;
 

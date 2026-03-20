@@ -2,13 +2,14 @@ use std::sync::mpsc;
 use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
 
-use af_policy::StaticPolicy;
+use af_policy::{CommandRuleSet, StaticPolicy};
 use tracing::{info, warn};
 
+use crate::command_rule_loader::LoadedCommandRules;
 use crate::static_policy_parser::LoadedPolicy;
 use crate::{
-    PolicyDirectoryWatcher, PolicyInfraError, PolicyInfraResult, PolicyReloadError,
-    PolicyRuntimeConfig, PolicyStatus, StaticPolicyParser,
+    CommandRuleLoader, PolicyDirectoryWatcher, PolicyInfraError, PolicyInfraResult,
+    PolicyReloadError, PolicyRuntimeConfig, PolicyStatus, StaticPolicyParser,
 };
 
 pub struct PolicyRuntime {
@@ -22,6 +23,7 @@ pub struct PolicyRuntime {
 pub struct ActivePolicy {
     pub revision: u64,
     pub policy: Arc<StaticPolicy>,
+    pub command_rules: Arc<CommandRuleSet>,
 }
 
 #[derive(Debug)]
@@ -42,13 +44,17 @@ impl std::fmt::Debug for PolicyRuntime {
 
 impl PolicyRuntime {
     pub fn start(config: PolicyRuntimeConfig) -> PolicyInfraResult<Self> {
-        let initial = load_static_policy(&config, 1)?;
+        let initial = load_policy_bundle(&config, 1)?;
         let state = Arc::new(RwLock::new(RuntimeState {
             active: initial,
             last_reload_error: None,
         }));
 
-        let watcher = PolicyDirectoryWatcher::start(config.root.clone())?;
+        let mut watch_roots = vec![config.root.clone()];
+        if let Some(command_rules) = config.command_rules.as_ref() {
+            watch_roots.push(command_rules.root.clone());
+        }
+        let watcher = PolicyDirectoryWatcher::start_many(watch_roots)?;
         let (stop_tx, stop_rx) = mpsc::channel();
         let worker_state = Arc::clone(&state);
         let worker_config = config.clone();
@@ -77,6 +83,8 @@ impl PolicyRuntime {
         Ok(PolicyStatus {
             revision: state.active.revision,
             policy_revision: state.active.policy.revision,
+            command_rules_revision: state.active.command_rules.revision,
+            command_rules_count: state.active.command_rules.rules.len(),
             last_reload_error: state.last_reload_error.clone(),
         })
     }
@@ -128,9 +136,10 @@ fn run_reload_worker(
             }
         };
 
-        match load_static_policy(&config, next_runtime_revision) {
+        match load_policy_bundle(&config, next_runtime_revision) {
             Ok(active) => {
                 let policy_revision = active.policy.revision;
+                let command_rules_count = active.command_rules.rules.len();
                 match state.write() {
                     Ok(mut guard) => {
                         guard.active = active;
@@ -143,7 +152,7 @@ fn run_reload_worker(
                 }
                 info!(
                     runtime_revision = next_runtime_revision,
-                    policy_revision, "policy reload applied"
+                    policy_revision, command_rules_count, "policy reload applied"
                 );
             }
             Err(error) => {
@@ -180,15 +189,27 @@ fn record_reload_error(
     }
 }
 
-fn load_static_policy(
+fn load_policy_bundle(
     config: &PolicyRuntimeConfig,
     runtime_revision: u64,
 ) -> PolicyInfraResult<ActivePolicy> {
-    let loaded: LoadedPolicy = StaticPolicyParser.parse(&config.root)?;
+    let loaded_policy: LoadedPolicy = StaticPolicyParser.parse(&config.root)?;
+    let loaded_rules: LoadedCommandRules =
+        if let Some(command_rules) = config.command_rules.as_ref() {
+            CommandRuleLoader.load(&command_rules.root, command_rules.strict, runtime_revision)?
+        } else {
+            LoadedCommandRules {
+                rules: CommandRuleSet {
+                    revision: runtime_revision,
+                    rules: Vec::new(),
+                },
+            }
+        };
 
     Ok(ActivePolicy {
         revision: runtime_revision,
-        policy: Arc::new(loaded.policy),
+        policy: Arc::new(loaded_policy.policy),
+        command_rules: Arc::new(loaded_rules.rules),
     })
 }
 
@@ -262,6 +283,50 @@ mod tests {
         let active = runtime.active_policy().expect("active policy");
         assert_eq!(active.policy.revision, 1);
         assert_eq!(active.revision, 1);
+    }
+
+    #[test]
+    fn loads_and_hot_reloads_command_rules() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let policy_root = temp_dir.path().join("policies");
+        let rule_root = temp_dir.path().join("command-rules");
+        fs::create_dir_all(&policy_root).expect("create policy dir");
+        fs::create_dir_all(&rule_root).expect("create rule dir");
+        fs::write(policy_root.join("static_policy.yaml"), policy_yaml(1)).expect("write policy");
+        fs::write(
+            rule_root.join("00-base.rules"),
+            r#"
+command_rule(
+    pattern = ["echo"],
+    capabilities = cap(),
+)
+"#,
+        )
+        .expect("write initial rules");
+
+        let runtime = PolicyRuntime::start(
+            PolicyRuntimeConfig::new(&policy_root)
+                .with_command_rules(&rule_root, true)
+                .with_poll_interval(Duration::from_millis(20)),
+        )
+        .expect("start runtime");
+        let active = runtime.active_policy().expect("read active policy");
+        assert_eq!(active.command_rules.rules.len(), 1);
+
+        fs::write(
+            rule_root.join("10-extra.rules"),
+            r#"
+command_rule(
+    pattern = ["ls"],
+    capabilities = cap(),
+)
+"#,
+        )
+        .expect("write updated rules");
+        wait_until_runtime_revision(&runtime, 2);
+
+        let active = runtime.active_policy().expect("read active policy");
+        assert_eq!(active.command_rules.rules.len(), 2);
     }
 
     fn wait_until_runtime_revision(runtime: &PolicyRuntime, target_revision: u64) {

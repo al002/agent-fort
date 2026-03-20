@@ -1,0 +1,80 @@
+# Realistic local-dev command rules (single-file example)
+
+# Read-only inspection
+command_rule(
+    pattern = ["git", ["status", "diff", "log", "show"]],
+    capabilities = cap(
+        fs_read = [cwd()],
+    ),
+    reason = "git inspection reads repository state",
+)
+
+command_rule(
+    pattern = ["cat"],
+    capabilities = cap(
+        fs_read = [all_positionals()],
+    ),
+    reason = "cat reads input files",
+)
+
+# Dependency install / download workflows
+command_rule(
+    pattern = ["npm", ["install", "ci"]],
+    capabilities = cap(
+        fs_write = [resolve_path("node_modules"), resolve_path("package-lock.json")],
+        net_connect = [net(host = "registry.npmjs.org", port = 443, protocol = "https")],
+    ),
+    reason = "npm install downloads packages and writes lock/module artifacts",
+    match = ["npm install"],
+)
+
+command_rule(
+    pattern = ["pip", "install"],
+    capabilities = cap(
+        net_connect = [
+            net(host = "pypi.org", port = 443, protocol = "https"),
+            net(host = "files.pythonhosted.org", port = 443, protocol = "https"),
+        ],
+    ),
+    reason = "pip install fetches wheels and metadata from package hosts",
+    match = ["pip install requests"],
+)
+
+command_rule(
+    pattern = ["curl"],
+    capabilities = cap(
+        net_connect = [net(host = url_host_from_arg(0), port = 443, protocol = "https")],
+    ),
+    reason = "curl connects to url host",
+    match = ["curl https://example.com"],
+)
+
+command_rule(
+    pattern = ["curl"],
+    when = has_any(["-o", "--output"]),
+    capabilities = cap(
+        fs_write = [resolve_path(arg_after_any(["-o", "--output"]))],
+    ),
+    reason = "curl output writes destination file",
+    match = ["curl https://example.com -o result.json"],
+)
+
+# High-risk patterns
+command_rule(
+    pattern = ["find"],
+    when = has_any(["-exec", "-execdir", "-ok", "-okdir"]),
+    capabilities = cap(
+        host_exec = True,
+        mark_unknown = True,
+        risk_tags = ["dynamic_exec"],
+    ),
+    reason = "find exec variants can execute arbitrary commands",
+)
+
+command_rule(
+    pattern = [["bash", "sh", "zsh"], ["-c", "-lc"]],
+    capabilities = cap(
+        process_control = True,
+    ),
+    reason = "shell wrapper executes nested command string",
+)

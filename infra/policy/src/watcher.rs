@@ -14,17 +14,27 @@ pub struct PolicyDirectoryWatcher {
 
 impl PolicyDirectoryWatcher {
     pub fn start(root: impl Into<PathBuf>) -> PolicyInfraResult<Self> {
-        let root = root.into();
+        Self::start_many(vec![root.into()])
+    }
+
+    pub fn start_many(roots: Vec<PathBuf>) -> PolicyInfraResult<Self> {
+        if roots.is_empty() {
+            return Err(PolicyInfraError::WatchBackend {
+                message: "watch roots cannot be empty".to_string(),
+            });
+        }
+        let mut deduped = roots;
+        deduped.sort();
+        deduped.dedup();
 
         #[cfg(target_os = "linux")]
         {
             let (tx, rx) = mpsc::channel();
             let (ready_tx, ready_rx) = mpsc::channel();
             let (shutdown_read_fd, shutdown_write_fd) = new_shutdown_pipe()?;
-            let thread_root = root.clone();
+            let thread_roots = deduped.clone();
             let thread = std::thread::spawn(move || {
-                if let Err(error) =
-                    watch_loop(thread_root.clone(), shutdown_read_fd, tx.clone(), ready_tx)
+                if let Err(error) = watch_loop(thread_roots, shutdown_read_fd, tx.clone(), ready_tx)
                 {
                     let _ = tx.send(Err(error));
                 }
@@ -45,7 +55,7 @@ impl PolicyDirectoryWatcher {
 
         #[cfg(not(target_os = "linux"))]
         {
-            let _ = root;
+            let _ = deduped;
             Err(PolicyInfraError::UnsupportedPlatform)
         }
     }
@@ -83,12 +93,12 @@ impl Drop for PolicyDirectoryWatcher {
 
 #[cfg(target_os = "linux")]
 fn watch_loop(
-    root: PathBuf,
+    roots: Vec<PathBuf>,
     shutdown_read_fd: std::os::fd::OwnedFd,
     tx: mpsc::Sender<PolicyInfraResult<()>>,
     ready_tx: mpsc::Sender<PolicyInfraResult<()>>,
 ) -> PolicyInfraResult<()> {
-    let mut state = match LinuxWatcherState::new(root.clone()) {
+    let mut state = match LinuxWatcherState::new(roots) {
         Ok(state) => {
             let _ = ready_tx.send(Ok(()));
             state
@@ -112,7 +122,7 @@ fn watch_loop(
 
 #[cfg(target_os = "linux")]
 struct LinuxWatcherState {
-    root: PathBuf,
+    roots: Vec<PathBuf>,
     inotify_fd: std::os::fd::OwnedFd,
     watch_by_descriptor: std::collections::HashMap<i32, PathBuf>,
     descriptor_by_path: std::collections::BTreeMap<PathBuf, i32>,
@@ -120,10 +130,10 @@ struct LinuxWatcherState {
 
 #[cfg(target_os = "linux")]
 impl LinuxWatcherState {
-    fn new(root: PathBuf) -> PolicyInfraResult<Self> {
+    fn new(roots: Vec<PathBuf>) -> PolicyInfraResult<Self> {
         let inotify_fd = new_inotify_fd()?;
         let mut state = Self {
-            root,
+            roots,
             inotify_fd,
             watch_by_descriptor: std::collections::HashMap::new(),
             descriptor_by_path: std::collections::BTreeMap::new(),
@@ -150,7 +160,7 @@ impl LinuxWatcherState {
                 continue;
             }
 
-            let mut policy_changed = false;
+            let mut changed = false;
             let mut refresh_watches = false;
             let mut offset = 0usize;
             let header_len = std::mem::size_of::<libc::inotify_event>();
@@ -181,7 +191,7 @@ impl LinuxWatcherState {
                 }
 
                 if event.mask & libc::IN_Q_OVERFLOW != 0 {
-                    policy_changed = true;
+                    changed = true;
                     refresh_watches = true;
                     offset = next_offset;
                     continue;
@@ -192,11 +202,8 @@ impl LinuxWatcherState {
                     continue;
                 };
 
-                if is_mutating_event(event.mask) && is_static_policy_file(&self.root, &path) {
-                    policy_changed = true;
-                }
-                if path == self.root && is_mutating_event(event.mask) {
-                    policy_changed = true;
+                if is_mutating_event(event.mask) && is_policy_change_path(&self.roots, &path) {
+                    changed = true;
                     refresh_watches = true;
                 }
 
@@ -207,7 +214,7 @@ impl LinuxWatcherState {
                 self.refresh_watches()?;
             }
 
-            if policy_changed {
+            if changed {
                 return Ok(Some(()));
             }
         }
@@ -216,7 +223,7 @@ impl LinuxWatcherState {
     fn refresh_watches(&mut self) -> PolicyInfraResult<()> {
         use std::os::fd::AsRawFd;
 
-        let expected_paths = collect_watch_roots(&self.root)
+        let expected_paths = collect_watch_roots(&self.roots)
             .into_iter()
             .collect::<std::collections::BTreeSet<_>>();
 
@@ -273,24 +280,21 @@ impl LinuxWatcherState {
 }
 
 #[cfg(target_os = "linux")]
-fn collect_watch_roots(root: &Path) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if root.exists() {
-        roots.push(root.to_path_buf());
+fn collect_watch_roots(configured_roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut watch_roots = Vec::new();
+    for root in configured_roots {
+        if root.exists() {
+            watch_roots.push(root.to_path_buf());
+        }
+        if let Some(parent) = root.parent() {
+            watch_roots.push(parent.to_path_buf());
+        } else {
+            watch_roots.push(root.to_path_buf());
+        }
     }
-    if let Some(parent) = root.parent() {
-        roots.push(parent.to_path_buf());
-    } else {
-        roots.push(root.to_path_buf());
-    }
-    roots.sort();
-    roots.dedup();
-    roots
-}
-
-#[cfg(target_os = "linux")]
-fn is_static_policy_file(root: &Path, path: &Path) -> bool {
-    path == root.join("static_policy.yaml") || path == root.join("static_policy.yml")
+    watch_roots.sort();
+    watch_roots.dedup();
+    watch_roots
 }
 
 #[cfg(target_os = "linux")]
@@ -305,6 +309,25 @@ fn is_mutating_event(mask: u32) -> bool {
         | libc::IN_DELETE_SELF
         | libc::IN_MOVE_SELF)
         != 0
+}
+
+#[cfg(target_os = "linux")]
+fn is_policy_change_path(roots: &[PathBuf], path: &Path) -> bool {
+    roots
+        .iter()
+        .any(|root| is_policy_change_for_root(root.as_path(), path))
+}
+
+#[cfg(target_os = "linux")]
+fn is_policy_change_for_root(root: &Path, path: &Path) -> bool {
+    if path == root {
+        return true;
+    }
+    if path == root.join("static_policy.yaml") || path == root.join("static_policy.yml") {
+        return true;
+    }
+    path.parent() == Some(root)
+        && path.extension().and_then(|value| value.to_str()) == Some("rules")
 }
 
 #[cfg(target_os = "linux")]
@@ -483,6 +506,54 @@ mod tests {
 
         let watcher = PolicyDirectoryWatcher::start(&root).expect("start watcher");
         fs::write(root.join("static_policy.yaml"), "version: 2").expect("rewrite policy file");
+
+        let event = watcher
+            .recv_timeout(Duration::from_secs(2))
+            .expect("wait for watch event")
+            .expect("watch event should arrive");
+        assert_eq!(event, ());
+    }
+
+    #[test]
+    fn ignores_unrelated_sibling_file_changes() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let root = temp_dir.path().join("policies");
+        fs::create_dir_all(&root).expect("create policy dir");
+        fs::write(root.join("static_policy.yaml"), "version: 1").expect("write policy file");
+
+        let watcher = PolicyDirectoryWatcher::start(&root).expect("start watcher");
+        fs::write(temp_dir.path().join("notes.txt"), "not policy").expect("write sibling file");
+
+        let event = watcher
+            .recv_timeout(Duration::from_millis(300))
+            .expect("wait for watch event");
+        assert!(event.is_none());
+    }
+
+    #[test]
+    fn ignores_unrelated_file_changes_under_policy_root() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let root = temp_dir.path().join("policies");
+        fs::create_dir_all(&root).expect("create policy dir");
+        fs::write(root.join("static_policy.yaml"), "version: 1").expect("write policy file");
+
+        let watcher = PolicyDirectoryWatcher::start(&root).expect("start watcher");
+        fs::write(root.join("readme.txt"), "not policy").expect("write unrelated file");
+
+        let event = watcher
+            .recv_timeout(Duration::from_millis(300))
+            .expect("wait for watch event");
+        assert!(event.is_none());
+    }
+
+    #[test]
+    fn emits_event_when_command_rule_file_changes() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let root = temp_dir.path().join("command-rules");
+        fs::create_dir_all(&root).expect("create command rule dir");
+
+        let watcher = PolicyDirectoryWatcher::start(&root).expect("start watcher");
+        fs::write(root.join("00-base.rules"), "command_rule()").expect("write rule file");
 
         let event = watcher
             .recv_timeout(Duration::from_secs(2))

@@ -6,10 +6,10 @@ pub mod runtime;
 pub mod services;
 
 pub use capability::{
-    CapabilityDelta, CapabilityExtractor, CommandIR, CommandParseError, CommandParser, NetEndpoint,
-    RequestedCapabilities, apply_delta_to_capability_set, capability_set_within_policy,
-    intersect_requested_with_capabilities, missing_from_session_grant,
-    requested_within_backend_limits, requested_within_capabilities,
+    CapabilityDelta, CapabilityExtractor, CommandIR, CommandParseError, CommandParser,
+    CommandRuleEngine, NetEndpoint, RequestedCapabilities, apply_delta_to_capability_set,
+    capability_set_within_policy, intersect_requested_with_capabilities,
+    missing_from_session_grant, requested_within_backend_limits, requested_within_capabilities,
 };
 pub use errors::{ApprovalAppError, SessionAppError, TaskAppError};
 pub use operation::{

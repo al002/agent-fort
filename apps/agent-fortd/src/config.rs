@@ -13,6 +13,8 @@ const ENV_BWRAP_PATH: &str = "AF_BWRAP_PATH";
 const ENV_CGROUP_ROOT: &str = "AF_CGROUP_ROOT";
 const ENV_STORE_PATH: &str = "AF_STORE_PATH";
 const ENV_POLICY_DIR: &str = "AF_POLICY_DIR";
+const ENV_COMMAND_RULES_DIR: &str = "AF_COMMAND_RULES_DIR";
+const ENV_COMMAND_RULES_STRICT: &str = "AF_COMMAND_RULES_STRICT";
 const ENV_RESOURCE_GOVERNANCE_MODE: &str = "AF_RESOURCE_GOVERNANCE_MODE";
 const DEFAULT_DAEMON_ENDPOINT: &str = "/tmp/agent-fortd.sock";
 const DEFAULT_BWRAP_PATH: &str = "/usr/bin/bwrap";
@@ -30,6 +32,8 @@ pub struct DaemonConfig {
     pub cgroup_root: PathBuf,
     pub store_path: PathBuf,
     pub policy_dir: PathBuf,
+    pub command_rules_dir: PathBuf,
+    pub command_rules_strict: bool,
     pub resource_governance_mode: ResourceGovernanceMode,
 }
 
@@ -54,11 +58,20 @@ impl DaemonConfig {
         let store_path = env::var(ENV_STORE_PATH)
             .map(PathBuf::from)
             .unwrap_or_else(|_| default_store_path());
-        let policy_dir = resolve_policy_dir(
+        let policy_dir = resolve_dir_path(
             env::var(ENV_POLICY_DIR)
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| default_policy_dir()),
         )?;
+        let command_rules_dir = resolve_dir_path(
+            env::var(ENV_COMMAND_RULES_DIR)
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| default_command_rules_dir(&policy_dir)),
+        )?;
+        let command_rules_strict = env::var(ENV_COMMAND_RULES_STRICT)
+            .ok()
+            .and_then(|raw| parse_bool(raw.as_str()))
+            .unwrap_or(false);
         let resource_governance_mode = env::var(ENV_RESOURCE_GOVERNANCE_MODE)
             .ok()
             .and_then(|raw| parse_resource_governance_mode(raw.as_str()))
@@ -72,6 +85,8 @@ impl DaemonConfig {
             cgroup_root,
             store_path,
             policy_dir,
+            command_rules_dir,
+            command_rules_strict,
             resource_governance_mode,
         })
     }
@@ -87,6 +102,10 @@ fn default_policy_dir() -> PathBuf {
         .join("policies")
 }
 
+fn default_command_rules_dir(policy_dir: &PathBuf) -> PathBuf {
+    policy_dir.join("command-rules")
+}
+
 fn default_helper_path() -> PathBuf {
     if let Ok(executable) = std::env::current_exe()
         && let Some(parent) = executable.parent()
@@ -99,7 +118,7 @@ fn default_helper_path() -> PathBuf {
         .join(DEFAULT_HELPER_FILE)
 }
 
-fn resolve_policy_dir(path: PathBuf) -> Result<PathBuf> {
+fn resolve_dir_path(path: PathBuf) -> Result<PathBuf> {
     let absolute = if path.is_absolute() {
         path
     } else {
@@ -110,6 +129,14 @@ fn resolve_policy_dir(path: PathBuf) -> Result<PathBuf> {
         Ok(path) => Ok(path),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(absolute),
         Err(error) => Err(error.into()),
+    }
+}
+
+fn parse_bool(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
     }
 }
 

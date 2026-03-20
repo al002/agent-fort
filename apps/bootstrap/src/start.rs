@@ -61,6 +61,8 @@ pub fn run(args: StartArgs) -> Result<StartOutput> {
         &state.bwrap_path,
         &state.helper_path,
         args.policy_dir.as_deref(),
+        args.command_rules_dir.as_deref(),
+        args.command_rules_strict,
         args.store_path.as_deref(),
     )?;
     let deadline = Instant::now() + Duration::from_millis(args.startup_timeout_ms);
@@ -194,6 +196,8 @@ fn spawn_daemon(
     bwrap_path: &Path,
     helper_path: &Path,
     policy_dir: Option<&Path>,
+    command_rules_dir: Option<&Path>,
+    command_rules_strict: Option<bool>,
     store_path: Option<&Path>,
 ) -> Result<u32> {
     let mut command = Command::new(daemon_path);
@@ -206,6 +210,19 @@ fn spawn_daemon(
         .stderr(Stdio::null());
     if let Some(policy_dir) = policy_dir {
         command.env("AF_POLICY_DIR", policy_dir);
+    }
+    if let Some(command_rules_dir) = command_rules_dir {
+        command.env("AF_COMMAND_RULES_DIR", command_rules_dir);
+    }
+    if let Some(command_rules_strict) = command_rules_strict {
+        command.env(
+            "AF_COMMAND_RULES_STRICT",
+            if command_rules_strict {
+                "true"
+            } else {
+                "false"
+            },
+        );
     }
     if let Some(store_path) = store_path {
         command.env("AF_STORE_PATH", store_path);

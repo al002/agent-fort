@@ -40,6 +40,8 @@ pub struct StartArgs {
     pub bwrap_path: Option<PathBuf>,
     pub helper_path: Option<PathBuf>,
     pub policy_dir: Option<PathBuf>,
+    pub command_rules_dir: Option<PathBuf>,
+    pub command_rules_strict: Option<bool>,
     pub store_path: Option<PathBuf>,
 }
 
@@ -202,6 +204,8 @@ fn parse_start(args: &[String]) -> Result<ParseOutcome> {
         bwrap_path: None,
         helper_path: None,
         policy_dir: None,
+        command_rules_dir: None,
+        command_rules_strict: None,
         store_path: None,
     };
 
@@ -250,6 +254,16 @@ fn parse_start(args: &[String]) -> Result<ParseOutcome> {
             "--policy-dir" => {
                 let (value, next) = parse_value(args, i, "--policy-dir")?;
                 parsed.policy_dir = Some(PathBuf::from(value));
+                i = next;
+            }
+            "--command-rules-dir" => {
+                let (value, next) = parse_value(args, i, "--command-rules-dir")?;
+                parsed.command_rules_dir = Some(PathBuf::from(value));
+                i = next;
+            }
+            "--command-rules-strict" => {
+                let (value, next) = parse_value(args, i, "--command-rules-strict")?;
+                parsed.command_rules_strict = Some(parse_bool_flag(&value)?);
                 i = next;
             }
             "--store-path" => {
@@ -328,8 +342,16 @@ fn sync_help_text() -> String {
 }
 
 fn start_help_text() -> String {
-    "Usage: af-bootstrap start [OPTIONS]\n\nOptions:\n  --install-root <PATH>\n  --endpoint <ENDPOINT>\n  --startup-timeout-ms <MILLIS> (default: 10000)\n  --ping-interval-ms <MILLIS> (default: 200)\n  --daemon-path <PATH>\n  --bwrap-path <PATH>\n  --helper-path <PATH>\n  --policy-dir <PATH>\n  --store-path <PATH>\n  -h, --help"
+    "Usage: af-bootstrap start [OPTIONS]\n\nOptions:\n  --install-root <PATH>\n  --endpoint <ENDPOINT>\n  --startup-timeout-ms <MILLIS> (default: 10000)\n  --ping-interval-ms <MILLIS> (default: 200)\n  --daemon-path <PATH>\n  --bwrap-path <PATH>\n  --helper-path <PATH>\n  --policy-dir <PATH>\n  --command-rules-dir <PATH>\n  --command-rules-strict <BOOL>\n  --store-path <PATH>\n  -h, --help"
         .to_string()
+}
+
+fn parse_bool_flag(raw: &str) -> Result<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" => Ok(false),
+        _ => bail!("invalid boolean value `{raw}`; expected true/false"),
+    }
 }
 
 fn stop_help_text() -> String {

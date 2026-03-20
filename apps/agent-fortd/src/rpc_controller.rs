@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -9,12 +9,13 @@ use af_approval::{
 use af_audit::{AuditEventType, AuditRepository, NewAuditEvent};
 use af_core::{
     ApprovalAppError, ApprovalAppService, BackendSelector, CancelTaskInput, CapabilityDecision,
-    CapabilityDelta, CapabilityExtractor, CapabilityPolicyEvaluator, CreateSessionInput,
-    CreateTaskInput, EvaluationMode, GetApprovalInput, NormalizedCommand, OperationNormalizer,
-    RawOperation, RequestedCapabilities, RespondApprovalInput, RuntimeCompiler, RuntimeContext,
-    RuntimePlatform, SessionAppError, SessionAppService, SessionConfig, TaskAppError,
-    TaskAppService, apply_delta_to_capability_set, capability_set_within_policy,
-    intersect_requested_with_capabilities, requested_within_capabilities,
+    CapabilityDelta, CapabilityExtractor, CapabilityPolicyEvaluator, CommandRuleEngine,
+    CreateSessionInput, CreateTaskInput, EvaluationMode, GetApprovalInput, NormalizedCommand,
+    OperationNormalizer, RawOperation, RequestedCapabilities, RespondApprovalInput,
+    RuntimeCompiler, RuntimeContext, RuntimePlatform, SessionAppError, SessionAppService,
+    SessionConfig, TaskAppError, TaskAppService, apply_delta_to_capability_set,
+    capability_set_within_policy, intersect_requested_with_capabilities,
+    requested_within_capabilities,
 };
 use af_policy::CapabilitySet;
 use af_policy_infra::{ActivePolicy, PolicyRuntime};
@@ -620,7 +621,7 @@ impl RpcController {
 
         let normalized =
             normalize_task_operation(&snapshot.operation, runtime, &self.state.daemon_instance_id)?;
-        let requested = requested_from_normalized(&normalized);
+        let requested = requested_from_normalized(&normalized, &active_policy);
 
         if !requested_within_capabilities(&requested, &session_grant.capabilities) {
             return execute_deny_path(
@@ -679,7 +680,7 @@ fn authorize_interactive(
     active_policy: &ActivePolicy,
     session_grant: &SessionGrantState,
 ) -> Result<AuthorizationResult, RpcResponse> {
-    let requested = requested_from_normalized(&normalized);
+    let requested = requested_from_normalized(&normalized, active_policy);
     let evaluator = CapabilityPolicyEvaluator;
     match evaluator.decide(
         &requested,
@@ -751,9 +752,17 @@ fn compile_allow_plan(
     })
 }
 
-fn requested_from_normalized(normalized: &af_core::NormalizedOperation) -> RequestedCapabilities {
+fn requested_from_normalized(
+    normalized: &af_core::NormalizedOperation,
+    active_policy: &ActivePolicy,
+) -> RequestedCapabilities {
     let extractor = CapabilityExtractor::default();
     let mut requested = extractor.from_operation(normalized);
+    if !active_policy.command_rules.rules.is_empty() {
+        let rule_engine = CommandRuleEngine::new(Arc::clone(&active_policy.command_rules));
+        requested.merge(rule_engine.from_operation(normalized));
+        clear_unclassified_unknown_covered_by_rules(&mut requested);
+    }
     if normalized.unknown {
         requested.unknown = true;
     }
@@ -763,6 +772,70 @@ fn requested_from_normalized(normalized: &af_core::NormalizedOperation) -> Reque
     requested.reason_codes.sort();
     requested.reason_codes.dedup();
     requested
+}
+
+fn clear_unclassified_unknown_covered_by_rules(requested: &mut RequestedCapabilities) {
+    let covered_commands: HashSet<String> = requested
+        .reason_codes
+        .iter()
+        .filter_map(|code| {
+            code.strip_prefix("rule.command:")
+                .map(std::string::ToString::to_string)
+        })
+        .collect();
+    if covered_commands.is_empty() {
+        return;
+    }
+
+    let mut removed_unclassified = false;
+    requested.reason_codes.retain(|code| {
+        if code.starts_with("rule.command:") {
+            return false;
+        }
+        if let Some(command_raw) = code.strip_prefix("command.unclassified:")
+            && covered_commands.contains(command_raw)
+        {
+            removed_unclassified = true;
+            return false;
+        }
+        true
+    });
+
+    if !removed_unclassified {
+        return;
+    }
+
+    let has_remaining_unclassified = requested
+        .reason_codes
+        .iter()
+        .any(|code| code.starts_with("command.unclassified:"));
+    let has_other_unknown_reason = requested
+        .reason_codes
+        .iter()
+        .any(|code| reason_implies_unknown_except_unclassified(code));
+
+    if !has_remaining_unclassified && !has_other_unknown_reason {
+        requested.unknown = false;
+    }
+}
+
+fn reason_implies_unknown_except_unclassified(code: &str) -> bool {
+    code == "net.endpoint_unknown"
+        || code == "operation.unknown_kind"
+        || code == "redirect.unknown"
+        || code == "redirect.target_missing"
+        || code == "parser.has_error"
+        || code == "parser.failed"
+        || code == "exec.argv_empty"
+        || code == "exec.command_missing"
+        || code == "command.binary_missing"
+        || code.starts_with("dynamic.script:")
+        || code == "dynamic.script.inline"
+        || code.starts_with("command.dangerous:")
+        || code.starts_with("command.risky:")
+        || code.starts_with("rule.mark_unknown:")
+        || code.starts_with("rule.net_host_missing:")
+        || code.starts_with("rule.net_host_invalid:")
 }
 
 fn execute_allow_path(
@@ -1272,6 +1345,84 @@ fn network_policy_from_plan(network_mode: &str, no_network_endpoints: bool) -> N
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn network_policy_is_disabled_when_no_endpoint_even_if_mode_full() {
+        assert_eq!(
+            network_policy_from_plan("full", true),
+            NetworkPolicy::Disabled
+        );
+    }
+
+    #[test]
+    fn network_policy_follows_mode_when_endpoint_exists() {
+        assert_eq!(network_policy_from_plan("full", false), NetworkPolicy::Full);
+        assert_eq!(
+            network_policy_from_plan("proxy_only", false),
+            NetworkPolicy::ProxyOnly
+        );
+        assert_eq!(
+            network_policy_from_plan("deny", false),
+            NetworkPolicy::Disabled
+        );
+    }
+
+    #[test]
+    fn clears_unclassified_unknown_when_rule_covers_command() {
+        let mut requested = RequestedCapabilities {
+            unknown: true,
+            reason_codes: vec![
+                "command.unclassified:curl https://example.com".to_string(),
+                "rule.command:curl https://example.com".to_string(),
+                "rule.matched:00.rules:1#1".to_string(),
+            ],
+            ..RequestedCapabilities::default()
+        };
+
+        clear_unclassified_unknown_covered_by_rules(&mut requested);
+
+        assert!(!requested.unknown);
+        assert!(
+            !requested
+                .reason_codes
+                .iter()
+                .any(|code| code == "command.unclassified:curl https://example.com")
+        );
+        assert!(
+            !requested
+                .reason_codes
+                .iter()
+                .any(|code| code == "rule.command:curl https://example.com")
+        );
+    }
+
+    #[test]
+    fn keeps_unknown_when_other_unknown_reason_exists() {
+        let mut requested = RequestedCapabilities {
+            unknown: true,
+            reason_codes: vec![
+                "command.unclassified:curl https://example.com".to_string(),
+                "rule.command:curl https://example.com".to_string(),
+                "parser.failed".to_string(),
+            ],
+            ..RequestedCapabilities::default()
+        };
+
+        clear_unclassified_unknown_covered_by_rules(&mut requested);
+
+        assert!(requested.unknown);
+        assert!(
+            requested
+                .reason_codes
+                .iter()
+                .any(|code| code == "parser.failed")
+        );
+    }
+}
+
 fn syscall_policy_from_plan(syscall_policy: &str) -> SyscallPolicy {
     if syscall_policy.eq_ignore_ascii_case("unconfined") {
         SyscallPolicy::Unconfined
@@ -1485,6 +1636,8 @@ fn requested_capabilities_to_json(requested: &RequestedCapabilities) -> Value {
         "credential_access": requested.credential_access,
         "unknown": requested.unknown,
         "reason_codes": requested.reason_codes,
+        "matched_rules": requested.matched_rules,
+        "risk_tags": requested.risk_tags,
     })
 }
 

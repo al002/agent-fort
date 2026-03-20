@@ -36,9 +36,9 @@ impl Default for LinuxSandboxConfig {
             cgroup_root: PathBuf::from("/sys/fs/cgroup"),
             inherit_env_keys: vec![
                 "PATH".to_string(),
-                // "HOME".to_string(),
-                // "USER".to_string(),
-                // "LOGNAME".to_string(),
+                "HOME".to_string(),
+                "USER".to_string(),
+                "LOGNAME".to_string(),
                 // "HTTP_PROXY".to_string(),
                 // "HTTPS_PROXY".to_string(),
                 // "ALL_PROXY".to_string(),

@@ -29,7 +29,6 @@ fn run() -> Result<()> {
 
     match args[0].as_str() {
         "proto" => run_proto(&args[1..]),
-        "codegen" => run_codegen(&args[1..]),
         "dev" => run_dev(&args[1..]),
         "bwrap" => run_bwrap(&args[1..]),
         "package" => run_package(&args[1..]),
@@ -52,45 +51,18 @@ fn run_proto(args: &[String]) -> Result<()> {
 
     let root = repo_root()?;
     match args[0].as_str() {
-        "lint" => run_checked(
-            Command::new("buf").arg("lint").current_dir(&root),
-            "run `buf lint`",
-        ),
-        "generate" => run_checked(
-            Command::new("buf").arg("generate").current_dir(&root),
-            "run `buf generate`",
-        ),
+        "lint" => run_proto_lint(&root),
+        "generate" => run_proto_generate(&root),
         "breaking" => {
             let against = parse_flag_value(&args[1..], "--against")
                 .unwrap_or_else(|| ".git#branch=main".to_string());
-            run_checked(
-                Command::new("buf")
-                    .arg("breaking")
-                    .arg("--against")
-                    .arg(&against)
-                    .current_dir(&root),
-                "run `buf breaking`",
-            )
+            run_proto_breaking(&root, &against)
         }
-        "all" => {
-            run_checked(
-                Command::new("buf").arg("lint").current_dir(&root),
-                "run `buf lint`",
-            )?;
+        "check-rust" => run_proto_rust_codegen_check(&root),
+        "ci" => {
             let against = parse_flag_value(&args[1..], "--against")
                 .unwrap_or_else(|| ".git#branch=main".to_string());
-            run_checked(
-                Command::new("buf")
-                    .arg("breaking")
-                    .arg("--against")
-                    .arg(&against)
-                    .current_dir(&root),
-                "run `buf breaking`",
-            )?;
-            run_checked(
-                Command::new("buf").arg("generate").current_dir(&root),
-                "run `buf generate`",
-            )
+            run_proto_ci(&root, &against)
         }
         "help" | "--help" | "-h" => {
             print_proto_usage();
@@ -103,33 +75,6 @@ fn run_proto(args: &[String]) -> Result<()> {
     }
 }
 
-fn run_codegen(args: &[String]) -> Result<()> {
-    if args.is_empty() {
-        print_codegen_usage();
-        return Ok(());
-    }
-
-    let root = repo_root()?;
-    match args[0].as_str() {
-        "check-rust-proto" | "check" => run_checked(
-            Command::new("cargo")
-                .arg("test")
-                .arg("-p")
-                .arg("af-rpc-proto")
-                .current_dir(&root),
-            "run rust proto generation check (`cargo test -p af-rpc-proto`)",
-        ),
-        "help" | "--help" | "-h" => {
-            print_codegen_usage();
-            Ok(())
-        }
-        other => {
-            print_codegen_usage();
-            bail!("unknown `codegen` subcommand `{other}`")
-        }
-    }
-}
-
 fn run_dev(args: &[String]) -> Result<()> {
     if args.is_empty() {
         print_dev_usage();
@@ -138,76 +83,10 @@ fn run_dev(args: &[String]) -> Result<()> {
 
     let root = repo_root()?;
     match args[0].as_str() {
-        "fmt" => run_checked(
-            Command::new("cargo")
-                .arg("fmt")
-                .arg("--all")
-                .arg("--check")
-                .current_dir(&root),
-            "run format check (`cargo fmt --all --check`)",
-        ),
-        "lint" => run_checked(
-            Command::new("cargo")
-                .arg("clippy")
-                .arg("--workspace")
-                .arg("--all-targets")
-                .arg("--")
-                .arg("-D")
-                .arg("warnings")
-                .current_dir(&root),
-            "run lint (`cargo clippy --workspace --all-targets -- -D warnings`)",
-        ),
-        "test" => run_checked(
-            Command::new("cargo")
-                .arg("test")
-                .arg("--workspace")
-                .current_dir(&root),
-            "run workspace tests (`cargo test --workspace`)",
-        ),
-        "integration" => run_checked(
-            Command::new("cargo")
-                .arg("test")
-                .arg("--workspace")
-                .arg("--tests")
-                .current_dir(&root),
-            "run integration test orchestration (`cargo test --workspace --tests`)",
-        ),
-        "all" => {
-            run_checked(
-                Command::new("cargo")
-                    .arg("fmt")
-                    .arg("--all")
-                    .arg("--check")
-                    .current_dir(&root),
-                "run format check (`cargo fmt --all --check`)",
-            )?;
-            run_checked(
-                Command::new("cargo")
-                    .arg("clippy")
-                    .arg("--workspace")
-                    .arg("--all-targets")
-                    .arg("--")
-                    .arg("-D")
-                    .arg("warnings")
-                    .current_dir(&root),
-                "run lint (`cargo clippy --workspace --all-targets -- -D warnings`)",
-            )?;
-            run_checked(
-                Command::new("cargo")
-                    .arg("test")
-                    .arg("--workspace")
-                    .current_dir(&root),
-                "run workspace tests (`cargo test --workspace`)",
-            )?;
-            run_checked(
-                Command::new("cargo")
-                    .arg("test")
-                    .arg("--workspace")
-                    .arg("--tests")
-                    .current_dir(&root),
-                "run integration test orchestration (`cargo test --workspace --tests`)",
-            )
-        }
+        "fmt" => run_fmt_check(&root),
+        "lint" => run_clippy_check(&root),
+        "test" => run_workspace_tests(&root),
+        "ci" => run_dev_ci(&root),
         "help" | "--help" | "-h" => {
             print_dev_usage();
             Ok(())
@@ -217,6 +96,90 @@ fn run_dev(args: &[String]) -> Result<()> {
             bail!("unknown `dev` subcommand `{other}`")
         }
     }
+}
+
+fn run_proto_ci(root: &Path, against: &str) -> Result<()> {
+    run_proto_lint(root)?;
+    run_proto_breaking(root, against)?;
+    run_proto_generate(root)?;
+    run_proto_rust_codegen_check(root)
+}
+
+fn run_proto_lint(root: &Path) -> Result<()> {
+    run_checked(
+        Command::new("buf").arg("lint").current_dir(root),
+        "run `buf lint`",
+    )
+}
+
+fn run_proto_breaking(root: &Path, against: &str) -> Result<()> {
+    run_checked(
+        Command::new("buf")
+            .arg("breaking")
+            .arg("--against")
+            .arg(against)
+            .current_dir(root),
+        "run `buf breaking`",
+    )
+}
+
+fn run_proto_generate(root: &Path) -> Result<()> {
+    run_checked(
+        Command::new("buf").arg("generate").current_dir(root),
+        "run `buf generate`",
+    )
+}
+
+fn run_proto_rust_codegen_check(root: &Path) -> Result<()> {
+    run_checked(
+        Command::new("cargo")
+            .arg("test")
+            .arg("-p")
+            .arg("af-rpc-proto")
+            .current_dir(root),
+        "run rust proto generation check (`cargo test -p af-rpc-proto`)",
+    )
+}
+
+fn run_dev_ci(root: &Path) -> Result<()> {
+    run_fmt_check(root)?;
+    run_clippy_check(root)?;
+    run_workspace_tests(root)
+}
+
+fn run_fmt_check(root: &Path) -> Result<()> {
+    run_checked(
+        Command::new("cargo")
+            .arg("fmt")
+            .arg("--all")
+            .arg("--check")
+            .current_dir(root),
+        "run format check (`cargo fmt --all --check`)",
+    )
+}
+
+fn run_clippy_check(root: &Path) -> Result<()> {
+    run_checked(
+        Command::new("cargo")
+            .arg("clippy")
+            .arg("--workspace")
+            .arg("--all-targets")
+            .arg("--")
+            .arg("-D")
+            .arg("warnings")
+            .current_dir(root),
+        "run lint (`cargo clippy --workspace --all-targets -- -D warnings`)",
+    )
+}
+
+fn run_workspace_tests(root: &Path) -> Result<()> {
+    run_checked(
+        Command::new("cargo")
+            .arg("test")
+            .arg("--workspace")
+            .current_dir(root),
+        "run workspace tests (`cargo test --workspace`)",
+    )
 }
 
 fn run_bwrap(args: &[String]) -> Result<()> {
@@ -568,17 +531,9 @@ fn build_sdk_af_bootstrap_binary(args: &[String]) -> Result<()> {
 fn sync_sdk_bootstrap_expected_sha256(
     repo_root: &Path,
     target: &str,
-    profile: BuildProfile,
+    _profile: BuildProfile,
     binary_sha256: &str,
 ) -> Result<()> {
-    if !matches!(profile, BuildProfile::Release) {
-        println!(
-            "skip sdk bootstrap checksum sync for profile `{}`",
-            profile.output_dir()
-        );
-        return Ok(());
-    }
-
     let output_path = repo_root
         .join("sdk")
         .join("rust")
@@ -1079,9 +1034,8 @@ fn repo_root() -> Result<PathBuf> {
 
 fn print_usage() {
     eprintln!("Usage:");
-    eprintln!("  cargo xtask proto <lint|breaking|generate|all> [options]");
-    eprintln!("  cargo xtask codegen <check-rust-proto>");
-    eprintln!("  cargo xtask dev <fmt|lint|test|integration|all>");
+    eprintln!("  cargo xtask proto <lint|breaking|generate|check-rust|ci> [options]");
+    eprintln!("  cargo xtask dev <fmt|lint|test|ci>");
     eprintln!("  cargo xtask bwrap <build|verify> [options]");
     eprintln!("  cargo xtask package <bundle|af-bootstrap> [options]");
 }
@@ -1091,12 +1045,8 @@ fn print_proto_usage() {
     eprintln!("  cargo xtask proto lint");
     eprintln!("  cargo xtask proto breaking [--against <source>]");
     eprintln!("  cargo xtask proto generate");
-    eprintln!("  cargo xtask proto all [--against <source>]");
-}
-
-fn print_codegen_usage() {
-    eprintln!("Usage:");
-    eprintln!("  cargo xtask codegen check-rust-proto");
+    eprintln!("  cargo xtask proto check-rust");
+    eprintln!("  cargo xtask proto ci [--against <source>]");
 }
 
 fn print_dev_usage() {
@@ -1104,8 +1054,7 @@ fn print_dev_usage() {
     eprintln!("  cargo xtask dev fmt");
     eprintln!("  cargo xtask dev lint");
     eprintln!("  cargo xtask dev test");
-    eprintln!("  cargo xtask dev integration");
-    eprintln!("  cargo xtask dev all");
+    eprintln!("  cargo xtask dev ci");
 }
 
 fn print_bwrap_usage() {

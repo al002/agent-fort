@@ -4,3 +4,4 @@ tmp/
 
 /target
 assets
+sdk/rust/src/generated

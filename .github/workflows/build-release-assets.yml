@@ -24,8 +24,8 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
 
-      - name: Build Release Artifacts
-        run: cargo build --locked --release -p agent-fortd -p af-helper -p af-bootstrap -p af-sdk
+      - name: Build Runtime And Bootstrap Artifacts
+        run: cargo build --locked --release -p agent-fortd -p af-helper -p af-bootstrap
 
       - name: Build Static bwrap
         run: cargo xtask bwrap build --target linux-x86_64 --engine docker
@@ -35,6 +35,9 @@ jobs:
 
       - name: Package Bootstrap From Build Outputs
         run: cargo xtask package af-bootstrap --target linux-x86_64 --profile release --skip-build
+
+      - name: Build SDK After Bootstrap Checksum Sync
+        run: cargo build --locked --release -p af-sdk
 
       - name: Stage Downloadable Assets
         run: |

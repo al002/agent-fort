@@ -12,8 +12,18 @@ The runtime backends are:
 
 ## Quick Start
 
+Install [buf](https://buf.build/) 
+
 ```bash
-cargo build -p af-bootstrap -p af-example-agent-tui
+# Homebrew
+brew install bufbuild/buf/buf
+# Go toolchain
+go install github.com/bufbuild/buf/cmd/buf@latest
+```
+
+```bash
+cargo xtask proto generate
+cargo xtask package af-bootstrap
 cargo xtask bwrap build
 cargo xtask package bundle
 cargo run -p af-example-agent-tui
@@ -27,14 +37,14 @@ Verify behavior in the TUI:
 If runtime binaries have changed, rebuild local package assets first:
 
 ```bash
+cargo xtask package af-bootstrap
 cargo xtask package bundle
-cargo build -p af-bootstrap
 ```
 
 ## Tech Stack
 
 - Rust
-- Protobuf (`prost`), managed by [Buf](https://buf.build/)
+- Protobuf (`prost`), managed by [buf](https://buf.build/)
 - Policy engine: static policy with session capability grants
 - Execution isolation: Linux sandbox with `bwrap`, seccomp, and cgroups v2
 - Storage: SQLite (`rusqlite`)
@@ -231,10 +241,9 @@ command_rule(
 ## Testing
 
 ```bash
-cargo xtask dev all
 cargo xtask dev test
-cargo xtask dev integration
-cargo xtask proto all
+cargo xtask dev ci
+cargo xtask proto ci
 ```
 
 ## Development Workflow
@@ -249,7 +258,7 @@ git clone --recurse-submodules <repo-url>
 git submodule update --init --recursive
 ```
 
-- Install Buf for proto workflow: <https://buf.build/>
+- Install [buf](https://buf.build/) 
 
 ```bash
 # Homebrew
@@ -258,26 +267,32 @@ brew install bufbuild/buf/buf
 go install github.com/bufbuild/buf/cmd/buf@latest
 ```
 
+- proto generate and build dependencies
+
+```bash
+cargo xtask proto generate
+cargo xtask bwrap build
+cargo xtask package af-bootstrap
+```
+
 - If protobuf schema changes:
 
 ```bash
-cargo xtask proto all
-cargo xtask codegen check-rust-proto
+cargo xtask proto ci
 ```
 
-- Implement by layers: `domain` -> `core` -> `infra` -> `apps/sdk`.
-- Run quality gates before submission:
+- Run quality check before submission:
 
 ```bash
-cargo xtask dev all
+cargo xtask dev ci
 ```
 
 - Use `af-example-agent-tui` for end-to-end smoke validation.
 - If runtime binaries change, rebuild local package assets:
 
 ```bash
-cargo xtask package bundle --profile debug
-cargo xtask package af-bootstrap --profile debug
+cargo xtask package af-bootstrap
+cargo xtask package bundle
 ```
 
 ## Project Status

@@ -22,6 +22,48 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Verify Embedded Bootstrap Checksum Against Release Asset
+        env:
+          TAG: ${{ inputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          tag="${TAG#refs/tags/}"
+          release_sha_url="https://github.com/${REPOSITORY}/releases/download/${tag}/af-bootstrap.sha256"
+          curl -fsSL "${release_sha_url}" -o /tmp/af-bootstrap.sha256
+
+          release_sha="$(awk 'NR==1{print $1}' /tmp/af-bootstrap.sha256 | tr '[:upper:]' '[:lower:]')"
+          if [ -z "${release_sha}" ]; then
+            echo "failed to parse release checksum from ${release_sha_url}"
+            exit 1
+          fi
+
+          manifest_path="sdk/rust/src/generated/bootstrap-sha256.toml"
+          if [ ! -f "${manifest_path}" ]; then
+            echo "missing manifest file: ${manifest_path}"
+            exit 1
+          fi
+
+          embedded_sha="$(
+            sed -nE 's/^linux-x86_64[[:space:]]*=[[:space:]]*"([0-9a-fA-F]{64})".*$/\1/p' "${manifest_path}" \
+              | head -n 1 \
+              | tr '[:upper:]' '[:lower:]'
+          )"
+          if [ -z "${embedded_sha}" ]; then
+            echo "failed to parse linux-x86_64 checksum from ${manifest_path}"
+            exit 1
+          fi
+
+          if [ "${embedded_sha}" != "${release_sha}" ]; then
+            echo "checksum mismatch:"
+            echo "  release asset: ${release_sha}"
+            echo "  sdk manifest : ${embedded_sha}"
+            exit 1
+          fi
+
+          echo "checksum matched for linux-x86_64: ${embedded_sha}"
+
       - name: Publish af-rpc-proto
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

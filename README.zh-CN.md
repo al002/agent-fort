@@ -12,8 +12,20 @@ Agent Fort 是给 AI Agent 使用的 security runtime SDK。
 
 ## 快速开始
 
+安装 [buf](https://buf.build/) 
+
 ```bash
-cargo build -p af-bootstrap -p af-example-agent-tui
+# Homebrew
+brew install bufbuild/buf/buf
+# Go toolchain
+go install github.com/bufbuild/buf/cmd/buf@latest
+```
+
+```bash
+cargo xtask proto generate
+cargo xtask package af-bootstrap
+cargo xtask bwrap build
+cargo xtask package bundle
 cargo run -p af-example-agent-tui
 ```
 
@@ -25,14 +37,14 @@ cargo run -p af-example-agent-tui
 如果运行时二进制有变更，请先更新本地打包产物：
 
 ```bash
-cargo xtask package bundle --profile debug
-cargo xtask package af-bootstrap --profile debug
+cargo xtask package af-bootstrap
+cargo xtask package bundle
 ```
 
 ## 技术栈
 
 - Rust
-- Protobuf（`prost`），由 [Buf](https://buf.build/) 管理
+- Protobuf（`prost`），由 [buf](https://buf.build/) 管理
 - 策略引擎：static policy 和会话级的动态 capability 权限
 - 执行隔离：基于 `bwrap`、seccomp、cgroups v2 的 Linux sandbox
 - 存储：SQLite（`rusqlite`）
@@ -232,10 +244,9 @@ command_rule(
 ## 测试
 
 ```bash
-cargo xtask dev all
 cargo xtask dev test
-cargo xtask dev integration
-cargo xtask proto all
+cargo xtask dev ci
+cargo xtask proto ci
 ```
 
 ## 开发流程
@@ -244,13 +255,13 @@ cargo xtask proto all
 git clone --recurse-submodules <repo-url>
 ```
 
-- 若仓库已克隆，再补拉 submodule：
+- 若仓库已克隆，再拉 submodule：
 
 ```bash
 git submodule update --init --recursive
 ```
 
-- Proto 工作流依赖 Buf：<https://buf.build/>
+- 安装 [buf](https://buf.build/)
 
 ```bash
 # Homebrew
@@ -259,26 +270,32 @@ brew install bufbuild/buf/buf
 go install github.com/bufbuild/buf/cmd/buf@latest
 ```
 
+- 生成 proto 和构建依赖：
+
+```bash
+cargo xtask proto generate
+cargo xtask bwrap build
+cargo xtask package af-bootstrap
+```
+
 - 若 protobuf 发生变更：
 
 ```bash
-cargo xtask proto all
-cargo xtask codegen check-rust-proto
+cargo xtask proto ci
 ```
 
-- 按分层推进实现：`domain` -> `core` -> `infra` -> `apps/sdk`。
-- 提交前执行统一质量检查：
+- 提交前执行检查：
 
 ```bash
-cargo xtask dev all
+cargo xtask dev ci
 ```
 
 - 使用 `af-example-agent-tui` 进行端到端冒烟验证。
 - 若运行时二进制发生变更，更新本地打包产物：
 
 ```bash
-cargo xtask package bundle --profile debug
-cargo xtask package af-bootstrap --profile debug
+cargo xtask package af-bootstrap
+cargo xtask package bundle
 ```
 
 ## 项目状态

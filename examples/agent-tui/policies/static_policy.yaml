@@ -31,7 +31,7 @@ capabilities:
 backends:
   backend_order:
     - sandbox
-  capability_matrix:
+  capability_limits:
     sandbox:
       fs_read:
         - "/home/**"

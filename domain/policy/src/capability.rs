@@ -44,17 +44,17 @@ impl Default for CapabilitySet {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BackendStaticPolicy {
+pub struct BackendPolicy {
     #[serde(default)]
     pub backend_order: Vec<RuntimeBackend>,
     #[serde(default)]
-    pub capability_matrix: BTreeMap<RuntimeBackend, BackendCapabilitySet>,
+    pub capability_limits: BTreeMap<RuntimeBackend, BackendCapabilityLimits>,
     #[serde(default)]
     pub profiles: BTreeMap<RuntimeBackend, BackendProfile>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BackendCapabilitySet {
+pub struct BackendCapabilityLimits {
     #[serde(default)]
     pub fs_read: Vec<String>,
     #[serde(default)]
@@ -170,16 +170,16 @@ pub enum DefaultAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StaticPolicyDocument {
+pub struct StaticPolicy {
     pub version: u32,
     pub revision: u64,
     pub default_action: DefaultAction,
     pub capabilities: CapabilitySet,
-    pub backends: BackendStaticPolicy,
+    pub backends: BackendPolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SessionGrantSnapshot {
+pub struct SessionGrant {
     pub session_id: String,
     pub revision: u64,
     pub expires_at_unix_ms: Option<i64>,

@@ -30,7 +30,7 @@ impl CapabilityDelta {
     }
 }
 
-pub fn diff_requested_vs_session_grant(
+pub fn missing_from_session_grant(
     requested: &RequestedCapabilities,
     session_grant: &CapabilitySet,
 ) -> CapabilityDelta {
@@ -141,7 +141,7 @@ mod tests {
             allow_credential_access: false,
         };
 
-        let delta = diff_requested_vs_session_grant(&requested, &grant);
+        let delta = missing_from_session_grant(&requested, &grant);
         assert_eq!(delta.fs_write, vec![PathBuf::from("/work/new.txt")]);
         assert_eq!(delta.net_connect.len(), 1);
     }

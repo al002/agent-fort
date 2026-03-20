@@ -1,4 +1,4 @@
-use af_policy::{BackendProfile, BackendResourceLimits, RuntimeBackend, StaticPolicyDocument};
+use af_policy::{BackendProfile, BackendResourceLimits, RuntimeBackend, StaticPolicy};
 use thiserror::Error;
 
 use crate::capability::{NetEndpoint, RequestedCapabilities};
@@ -84,9 +84,9 @@ impl RuntimeCompiler {
         &self,
         selected: &SelectedBackend,
         effective_caps: &RequestedCapabilities,
-        static_policy: &StaticPolicyDocument,
+        policy: &StaticPolicy,
     ) -> Result<RuntimeExecPlan, RuntimeCompileError> {
-        let Some(profile) = static_policy.backends.profiles.get(&selected.backend) else {
+        let Some(profile) = policy.backends.profiles.get(&selected.backend) else {
             return Err(RuntimeCompileError::MissingProfile {
                 backend: selected.backend.as_str().to_string(),
             });

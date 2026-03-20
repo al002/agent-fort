@@ -1,8 +1,8 @@
-use af_policy::{CapabilitySet, StaticPolicyDocument};
+use af_policy::{CapabilitySet, StaticPolicy};
 
 use crate::capability::{
-    RequestedCapabilities, apply_delta_to_capability_set, diff_requested_vs_session_grant,
-    subset_capability_set_within_static, subset_requested_vs_capabilities,
+    RequestedCapabilities, apply_delta_to_capability_set, capability_set_within_policy,
+    missing_from_session_grant, requested_within_capabilities,
 };
 
 use super::CapabilityDecision;
@@ -25,31 +25,31 @@ impl CapabilityPolicyEvaluator {
         &self,
         requested: &RequestedCapabilities,
         session_grant: &CapabilitySet,
-        static_policy: &StaticPolicyDocument,
+        policy: &StaticPolicy,
         mode: EvaluationMode,
     ) -> CapabilityDecision {
-        if !subset_capability_set_within_static(session_grant, &static_policy.capabilities) {
+        if !capability_set_within_policy(session_grant, &policy.capabilities) {
             return CapabilityDecision::Forbid {
-                reason: "session_grant exceeds static_policy".to_string(),
+                reason: "session_grant exceeds policy".to_string(),
             };
         }
 
         if requested.unknown {
             let _ = mode;
-            let delta = diff_requested_vs_session_grant(requested, session_grant);
+            let delta = missing_from_session_grant(requested, session_grant);
             return CapabilityDecision::Ask {
                 delta,
                 reason: "unknown capability".to_string(),
             };
         }
 
-        if subset_requested_vs_capabilities(requested, session_grant) {
+        if requested_within_capabilities(requested, session_grant) {
             return CapabilityDecision::Allow;
         }
 
-        let delta = diff_requested_vs_session_grant(requested, session_grant);
+        let delta = missing_from_session_grant(requested, session_grant);
         let expanded_grant = apply_delta_to_capability_set(session_grant, &delta);
-        if subset_capability_set_within_static(&expanded_grant, &static_policy.capabilities) {
+        if capability_set_within_policy(&expanded_grant, &policy.capabilities) {
             return CapabilityDecision::Ask {
                 delta,
                 reason: "capability escalation required".to_string(),
@@ -57,7 +57,7 @@ impl CapabilityPolicyEvaluator {
         }
 
         CapabilityDecision::Deny {
-            reason: "requested capability exceeds static_policy".to_string(),
+            reason: "requested capability exceeds policy".to_string(),
         }
     }
 }
@@ -67,14 +67,14 @@ mod tests {
     use std::path::PathBuf;
 
     use af_policy::{
-        BackendCapabilitySet, BackendProfile, BackendResourceLimits, BackendStaticPolicy,
-        CapabilitySet, DefaultAction, RuntimeBackend, SandboxProfile, StaticPolicyDocument,
+        BackendCapabilityLimits, BackendPolicy, BackendProfile, BackendResourceLimits,
+        CapabilitySet, DefaultAction, RuntimeBackend, SandboxProfile, StaticPolicy,
     };
 
     use super::*;
 
-    fn static_policy() -> StaticPolicyDocument {
-        StaticPolicyDocument {
+    fn policy_fixture() -> StaticPolicy {
+        StaticPolicy {
             version: 1,
             revision: 1,
             default_action: DefaultAction::Deny,
@@ -88,11 +88,11 @@ mod tests {
                 allow_privilege: false,
                 allow_credential_access: false,
             },
-            backends: BackendStaticPolicy {
+            backends: BackendPolicy {
                 backend_order: vec![RuntimeBackend::Sandbox],
-                capability_matrix: [(
+                capability_limits: [(
                     RuntimeBackend::Sandbox,
-                    BackendCapabilitySet {
+                    BackendCapabilityLimits {
                         fs_read: vec!["/work/**".to_string()],
                         fs_write: vec!["/work/**".to_string()],
                         fs_delete: vec!["/work/**".to_string()],
@@ -148,7 +148,7 @@ mod tests {
         let decision = CapabilityPolicyEvaluator.decide(
             &requested,
             &grant,
-            &static_policy(),
+            &policy_fixture(),
             EvaluationMode::INTERACTIVE,
         );
 
@@ -166,7 +166,7 @@ mod tests {
         let decision = CapabilityPolicyEvaluator.decide(
             &requested,
             &grant,
-            &static_policy(),
+            &policy_fixture(),
             EvaluationMode::INTERACTIVE,
         );
 
@@ -174,7 +174,7 @@ mod tests {
     }
 
     #[test]
-    fn asks_when_unknown_delta_exceeds_static_policy() {
+    fn asks_when_unknown_delta_exceeds_policy() {
         let requested = RequestedCapabilities {
             fs_read: [PathBuf::from("/outside/secret.txt")].into_iter().collect(),
             unknown: true,
@@ -185,7 +185,7 @@ mod tests {
         let decision = CapabilityPolicyEvaluator.decide(
             &requested,
             &grant,
-            &static_policy(),
+            &policy_fixture(),
             EvaluationMode::INTERACTIVE,
         );
 
@@ -202,7 +202,7 @@ mod tests {
         let decision = CapabilityPolicyEvaluator.decide(
             &requested,
             &CapabilitySet::default(),
-            &static_policy(),
+            &policy_fixture(),
             EvaluationMode::NON_INTERACTIVE,
         );
 

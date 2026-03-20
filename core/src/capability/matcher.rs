@@ -1,6 +1,6 @@
 use std::path::{Component, Path, PathBuf};
 
-use af_policy::{BackendCapabilitySet, CapabilitySet, NetRule};
+use af_policy::{BackendCapabilityLimits, CapabilitySet, NetRule};
 
 use super::{NetEndpoint, RequestedCapabilities};
 
@@ -27,11 +27,11 @@ pub fn normalize_lexical_path(path: &Path) -> PathBuf {
     }
 }
 
-pub fn subset_requested_vs_capabilities(
+pub fn requested_within_capabilities(
     requested: &RequestedCapabilities,
     capabilities: &CapabilitySet,
 ) -> bool {
-    subset_requested_vs_patterns(
+    requested_within_patterns(
         requested,
         &capabilities.fs_read,
         &capabilities.fs_write,
@@ -44,24 +44,24 @@ pub fn subset_requested_vs_capabilities(
     )
 }
 
-pub fn subset_requested_vs_backend(
+pub fn requested_within_backend_limits(
     requested: &RequestedCapabilities,
-    capabilities: &BackendCapabilitySet,
+    limits: &BackendCapabilityLimits,
 ) -> bool {
-    subset_requested_vs_patterns(
+    requested_within_patterns(
         requested,
-        &capabilities.fs_read,
-        &capabilities.fs_write,
-        &capabilities.fs_delete,
-        &capabilities.net_connect,
-        capabilities.allow_host_exec,
-        capabilities.allow_process_control,
-        capabilities.allow_privilege,
-        capabilities.allow_credential_access,
+        &limits.fs_read,
+        &limits.fs_write,
+        &limits.fs_delete,
+        &limits.net_connect,
+        limits.allow_host_exec,
+        limits.allow_process_control,
+        limits.allow_privilege,
+        limits.allow_credential_access,
     )
 }
 
-fn subset_requested_vs_patterns(
+fn requested_within_patterns(
     requested: &RequestedCapabilities,
     fs_read: &[String],
     fs_write: &[String],
@@ -107,7 +107,7 @@ fn subset_requested_vs_patterns(
         && (!requested.credential_access || allow_credential_access)
 }
 
-pub fn subset_capability_set_within_static(left: &CapabilitySet, right: &CapabilitySet) -> bool {
+pub fn capability_set_within_policy(left: &CapabilitySet, right: &CapabilitySet) -> bool {
     left.fs_read
         .iter()
         .all(|pattern| pattern_covered_by(pattern, &right.fs_read))
@@ -400,6 +400,6 @@ mod tests {
             allow_credential_access: false,
         };
 
-        assert!(subset_requested_vs_capabilities(&requested, &capabilities));
+        assert!(requested_within_capabilities(&requested, &capabilities));
     }
 }

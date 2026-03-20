@@ -38,9 +38,8 @@ impl BootstrappedDaemon {
             .status()?;
         info!(
             policy_dir = %config.policy_dir.display(),
-            policy_revision = policy_status.revision,
-            policy_files = policy_status.file_count,
-            static_policy_revision = policy_status.static_policy_revision,
+            runtime_revision = policy_status.revision,
+            policy_revision = policy_status.policy_revision,
             "policy directory runtime ready"
         );
 

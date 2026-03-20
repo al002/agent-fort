@@ -1,80 +1,98 @@
 use std::fs;
+use std::path::{Path, PathBuf};
 
-use af_policy::{BackendProfile, PolicyDirectorySnapshot, RuntimeBackend, StaticPolicyDocument};
+use af_policy::{BackendProfile, RuntimeBackend, StaticPolicy};
 
 use crate::{PolicyInfraError, PolicyInfraResult};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LoadedStaticPolicy {
-    pub snapshot: PolicyDirectorySnapshot,
-    pub document: StaticPolicyDocument,
+pub struct LoadedPolicy {
+    pub policy: StaticPolicy,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-pub struct YamlParser;
+pub struct StaticPolicyParser;
 
-impl YamlParser {
-    pub fn parse_static_policy(
-        &self,
-        snapshot: PolicyDirectorySnapshot,
-    ) -> PolicyInfraResult<LoadedStaticPolicy> {
-        let policy_file = snapshot
-            .files
-            .iter()
-            .find(|file| {
-                file.relative_path
-                    .eq_ignore_ascii_case("static_policy.yaml")
-                    || file.relative_path.eq_ignore_ascii_case("static_policy.yml")
-            })
-            .ok_or_else(|| PolicyInfraError::StaticPolicyMissing {
-                root: snapshot.root.clone(),
-            })?;
+impl StaticPolicyParser {
+    pub fn parse(&self, root: &Path) -> PolicyInfraResult<LoadedPolicy> {
+        let (policy_path, relative_path) = find_policy_path(root)?;
 
-        let raw = fs::read_to_string(&policy_file.absolute_path)?;
-        let document: StaticPolicyDocument =
+        let raw = fs::read_to_string(&policy_path)?;
+        let policy: StaticPolicy =
             serde_yaml::from_str(&raw).map_err(|error| PolicyInfraError::YamlParse {
-                path: policy_file.relative_path.clone(),
+                path: relative_path.clone(),
                 message: error.to_string(),
             })?;
 
-        validate_static_policy(&document, &policy_file.relative_path)?;
+        validate_policy(&policy, &relative_path)?;
 
-        Ok(LoadedStaticPolicy { snapshot, document })
+        Ok(LoadedPolicy { policy })
     }
 }
 
-fn validate_static_policy(document: &StaticPolicyDocument, path: &str) -> PolicyInfraResult<()> {
-    if document.version != 1 {
-        return Err(PolicyInfraError::InvalidDocument {
+fn find_policy_path(root: &Path) -> PolicyInfraResult<(PathBuf, String)> {
+    match fs::metadata(root) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => {
+            return Err(PolicyInfraError::DirectoryNotReadable {
+                path: root.to_path_buf(),
+            });
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(PolicyInfraError::DirectoryNotReadable {
+                path: root.to_path_buf(),
+            });
+        }
+        Err(error) => return Err(error.into()),
+    }
+
+    let yaml = root.join("static_policy.yaml");
+    if yaml.is_file() {
+        return Ok((yaml, "static_policy.yaml".to_string()));
+    }
+
+    let yml = root.join("static_policy.yml");
+    if yml.is_file() {
+        return Ok((yml, "static_policy.yml".to_string()));
+    }
+
+    Err(PolicyInfraError::StaticPolicyMissing {
+        root: root.to_path_buf(),
+    })
+}
+
+fn validate_policy(policy: &StaticPolicy, path: &str) -> PolicyInfraResult<()> {
+    if policy.version != 1 {
+        return Err(PolicyInfraError::InvalidPolicy {
             path: path.to_string(),
-            message: format!("unsupported static policy version: {}", document.version),
+            message: format!("unsupported static policy version: {}", policy.version),
         });
     }
 
-    for backend in &document.backends.backend_order {
-        if !document.backends.capability_matrix.contains_key(backend) {
-            return Err(PolicyInfraError::InvalidDocument {
+    for backend in &policy.backends.backend_order {
+        if !policy.backends.capability_limits.contains_key(backend) {
+            return Err(PolicyInfraError::InvalidPolicy {
                 path: path.to_string(),
                 message: format!(
-                    "backend `{}` missing capability_matrix entry",
+                    "backend `{}` missing capability_limits entry",
                     backend.as_str()
                 ),
             });
         }
-        if !document.backends.profiles.contains_key(backend) {
-            return Err(PolicyInfraError::InvalidDocument {
+        if !policy.backends.profiles.contains_key(backend) {
+            return Err(PolicyInfraError::InvalidPolicy {
                 path: path.to_string(),
                 message: format!("backend `{}` missing profile entry", backend.as_str()),
             });
         }
     }
 
-    for (backend, profile) in &document.backends.profiles {
-        if !document.backends.capability_matrix.contains_key(backend) {
-            return Err(PolicyInfraError::InvalidDocument {
+    for (backend, profile) in &policy.backends.profiles {
+        if !policy.backends.capability_limits.contains_key(backend) {
+            return Err(PolicyInfraError::InvalidPolicy {
                 path: path.to_string(),
                 message: format!(
-                    "profile backend `{}` missing capability_matrix entry",
+                    "profile backend `{}` missing capability_limits entry",
                     backend.as_str()
                 ),
             });
@@ -86,7 +104,7 @@ fn validate_static_policy(document: &StaticPolicyDocument, path: &str) -> Policy
                 | (RuntimeBackend::Microvm, BackendProfile::Microvm(_))
         );
         if !type_matches {
-            return Err(PolicyInfraError::InvalidDocument {
+            return Err(PolicyInfraError::InvalidPolicy {
                 path: path.to_string(),
                 message: format!("profile type mismatch for backend `{}`", backend.as_str()),
             });
@@ -102,8 +120,6 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use crate::PolicyDirectoryLoader;
-
     use super::*;
 
     #[test]
@@ -114,16 +130,12 @@ mod tests {
         fs::write(root.join("static_policy.yaml"), valid_static_policy_yaml())
             .expect("write static policy");
 
-        let snapshot = PolicyDirectoryLoader::new(&root)
-            .load()
-            .expect("load directory snapshot");
-        let loaded = YamlParser
-            .parse_static_policy(snapshot)
+        let loaded = StaticPolicyParser
+            .parse(&root)
             .expect("parse static policy");
 
-        assert_eq!(loaded.document.version, 1);
-        assert_eq!(loaded.document.revision, 9);
-        assert_eq!(loaded.snapshot.file_count(), 1);
+        assert_eq!(loaded.policy.version, 1);
+        assert_eq!(loaded.policy.revision, 9);
     }
 
     #[test]
@@ -133,11 +145,8 @@ mod tests {
         fs::create_dir_all(&root).expect("create policy dir");
         fs::write(root.join("extra.yaml"), "version: 1\nrules: []\n").expect("write file");
 
-        let snapshot = PolicyDirectoryLoader::new(&root)
-            .load()
-            .expect("load directory snapshot");
-        let error = YamlParser
-            .parse_static_policy(snapshot)
+        let error = StaticPolicyParser
+            .parse(&root)
             .expect_err("missing static policy should fail");
 
         assert!(matches!(
@@ -162,7 +171,7 @@ capabilities:
   allow_credential_access: false
 backends:
   backend_order: ["sandbox"]
-  capability_matrix:
+  capability_limits:
     sandbox:
       fs_read: ["/work/**"]
       fs_write: ["/work/**"]

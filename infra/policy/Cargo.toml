@@ -5,9 +5,7 @@ edition = "2024"
 
 [dependencies]
 af-policy = { path = "../../domain/policy" }
-cel = "0.13.0"
 libc = { workspace = true }
-serde = { workspace = true }
 serde_yaml = "0.9.34"
 thiserror = { workspace = true }
 tracing = { workspace = true }

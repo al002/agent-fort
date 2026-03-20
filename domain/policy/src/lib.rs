@@ -3,9 +3,9 @@ use std::path::PathBuf;
 pub mod capability;
 
 pub use capability::{
-    BackendCapabilitySet, BackendProfile, BackendResourceLimits, BackendStaticPolicy,
-    CapabilitySet, ContainerProfile, DefaultAction, MicrovmProfile, NetRule, RuntimeBackend,
-    SandboxProfile, SessionGrantSnapshot, StaticPolicyDocument,
+    BackendCapabilityLimits, BackendPolicy, BackendProfile, BackendResourceLimits, CapabilitySet,
+    ContainerProfile, DefaultAction, MicrovmProfile, NetRule, RuntimeBackend, SandboxProfile,
+    SessionGrant, StaticPolicy,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

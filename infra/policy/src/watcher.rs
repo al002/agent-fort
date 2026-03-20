@@ -2,11 +2,10 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
-use crate::directory_loader::collect_watched_directories;
-use crate::{PolicyInfraError, PolicyInfraResult, PolicyWatchEvent};
+use crate::{PolicyInfraError, PolicyInfraResult};
 
 pub struct PolicyDirectoryWatcher {
-    receiver: Receiver<PolicyInfraResult<PolicyWatchEvent>>,
+    receiver: Receiver<PolicyInfraResult<()>>,
     #[cfg(target_os = "linux")]
     shutdown_write_fd: std::os::fd::OwnedFd,
     #[cfg(target_os = "linux")]
@@ -51,14 +50,14 @@ impl PolicyDirectoryWatcher {
         }
     }
 
-    pub fn recv(&self) -> PolicyInfraResult<PolicyWatchEvent> {
+    pub fn recv(&self) -> PolicyInfraResult<()> {
         match self.receiver.recv() {
             Ok(result) => result,
             Err(_) => Err(PolicyInfraError::WatchChannelClosed),
         }
     }
 
-    pub fn recv_timeout(&self, timeout: Duration) -> PolicyInfraResult<Option<PolicyWatchEvent>> {
+    pub fn recv_timeout(&self, timeout: Duration) -> PolicyInfraResult<Option<()>> {
         match self.receiver.recv_timeout(timeout) {
             Ok(result) => result.map(Some),
             Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
@@ -86,7 +85,7 @@ impl Drop for PolicyDirectoryWatcher {
 fn watch_loop(
     root: PathBuf,
     shutdown_read_fd: std::os::fd::OwnedFd,
-    tx: mpsc::Sender<PolicyInfraResult<PolicyWatchEvent>>,
+    tx: mpsc::Sender<PolicyInfraResult<()>>,
     ready_tx: mpsc::Sender<PolicyInfraResult<()>>,
 ) -> PolicyInfraResult<()> {
     let mut state = match LinuxWatcherState::new(root.clone()) {
@@ -102,19 +101,10 @@ fn watch_loop(
         }
     };
     loop {
-        let Some(paths) = state.wait_for_paths(&shutdown_read_fd)? else {
+        let Some(()) = state.wait_for_paths(&shutdown_read_fd)? else {
             return Ok(());
         };
-        if paths.is_empty() {
-            continue;
-        }
-        if tx
-            .send(Ok(PolicyWatchEvent {
-                root: root.clone(),
-                paths,
-            }))
-            .is_err()
-        {
+        if tx.send(Ok(())).is_err() {
             return Ok(());
         }
     }
@@ -145,7 +135,7 @@ impl LinuxWatcherState {
     fn wait_for_paths(
         &mut self,
         shutdown_read_fd: &std::os::fd::OwnedFd,
-    ) -> PolicyInfraResult<Option<Vec<PathBuf>>> {
+    ) -> PolicyInfraResult<Option<()>> {
         use std::os::fd::AsRawFd;
 
         loop {
@@ -160,7 +150,7 @@ impl LinuxWatcherState {
                 continue;
             }
 
-            let mut paths = Vec::new();
+            let mut policy_changed = false;
             let mut refresh_watches = false;
             let mut offset = 0usize;
             let header_len = std::mem::size_of::<libc::inotify_event>();
@@ -191,7 +181,7 @@ impl LinuxWatcherState {
                 }
 
                 if event.mask & libc::IN_Q_OVERFLOW != 0 {
-                    paths.push(self.root.clone());
+                    policy_changed = true;
                     refresh_watches = true;
                     offset = next_offset;
                     continue;
@@ -202,8 +192,11 @@ impl LinuxWatcherState {
                     continue;
                 };
 
-                if affects_policy_root(&self.root, &path) && is_mutating_event(event.mask) {
-                    paths.push(path.clone());
+                if is_mutating_event(event.mask) && is_static_policy_file(&self.root, &path) {
+                    policy_changed = true;
+                }
+                if path == self.root && is_mutating_event(event.mask) {
+                    policy_changed = true;
                     refresh_watches = true;
                 }
 
@@ -214,8 +207,8 @@ impl LinuxWatcherState {
                 self.refresh_watches()?;
             }
 
-            if !paths.is_empty() {
-                return Ok(Some(paths));
+            if policy_changed {
+                return Ok(Some(()));
             }
         }
     }
@@ -223,7 +216,7 @@ impl LinuxWatcherState {
     fn refresh_watches(&mut self) -> PolicyInfraResult<()> {
         use std::os::fd::AsRawFd;
 
-        let expected_paths = collect_watched_directories(&self.root)?
+        let expected_paths = collect_watch_roots(&self.root)
             .into_iter()
             .collect::<std::collections::BTreeSet<_>>();
 
@@ -280,8 +273,24 @@ impl LinuxWatcherState {
 }
 
 #[cfg(target_os = "linux")]
-fn affects_policy_root(root: &Path, path: &Path) -> bool {
-    path == root || path.starts_with(root)
+fn collect_watch_roots(root: &Path) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if root.exists() {
+        roots.push(root.to_path_buf());
+    }
+    if let Some(parent) = root.parent() {
+        roots.push(parent.to_path_buf());
+    } else {
+        roots.push(root.to_path_buf());
+    }
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+#[cfg(target_os = "linux")]
+fn is_static_policy_file(root: &Path, path: &Path) -> bool {
+    path == root.join("static_policy.yaml") || path == root.join("static_policy.yml")
 }
 
 #[cfg(target_os = "linux")]
@@ -470,16 +479,15 @@ mod tests {
         let temp_dir = TempDir::new().expect("create temp dir");
         let root = temp_dir.path().join("policies");
         fs::create_dir_all(&root).expect("create policy dir");
-        fs::write(root.join("base.yaml"), "version: 1").expect("write policy file");
+        fs::write(root.join("static_policy.yaml"), "version: 1").expect("write policy file");
 
         let watcher = PolicyDirectoryWatcher::start(&root).expect("start watcher");
-        fs::write(root.join("base.yaml"), "version: 2").expect("rewrite policy file");
+        fs::write(root.join("static_policy.yaml"), "version: 2").expect("rewrite policy file");
 
         let event = watcher
             .recv_timeout(Duration::from_secs(2))
             .expect("wait for watch event")
             .expect("watch event should arrive");
-        assert_eq!(event.root, root);
-        assert!(event.paths.iter().any(|path| path.ends_with("base.yaml")));
+        assert_eq!(event, ());
     }
 }

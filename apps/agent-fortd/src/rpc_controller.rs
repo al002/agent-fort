@@ -13,11 +13,11 @@ use af_core::{
     CreateTaskInput, EvaluationMode, GetApprovalInput, NormalizedCommand, OperationNormalizer,
     RawOperation, RequestedCapabilities, RespondApprovalInput, RuntimeCompiler, RuntimeContext,
     RuntimePlatform, SessionAppError, SessionAppService, SessionConfig, TaskAppError,
-    TaskAppService, apply_delta_to_capability_set, intersect_requested_with_capabilities,
-    subset_capability_set_within_static, subset_requested_vs_capabilities,
+    TaskAppService, apply_delta_to_capability_set, capability_set_within_policy,
+    intersect_requested_with_capabilities, requested_within_capabilities,
 };
 use af_policy::CapabilitySet;
-use af_policy_infra::{ActiveStaticPolicy, PolicyRuntime};
+use af_policy_infra::{ActivePolicy, PolicyRuntime};
 use af_rpc_proto::codec::{decode_message, encode_message};
 use af_rpc_proto::task_outcome::Outcome as RpcTaskOutcome;
 use af_rpc_proto::{
@@ -88,7 +88,7 @@ struct AllowExecutionPlan {
     effective: RequestedCapabilities,
     runtime_plan: af_core::RuntimeExecPlan,
     session_grant_revision: u64,
-    static_policy_revision: u64,
+    policy_revision: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -97,14 +97,14 @@ struct AskExecutionPlan {
     delta: CapabilityDelta,
     reason: String,
     session_grant_revision: u64,
-    static_policy_revision: u64,
+    policy_revision: u64,
 }
 
 #[derive(Debug, Clone)]
 struct ApprovalSnapshot {
     operation: TaskOperation,
     session_grant_revision_before: u64,
-    static_policy_revision: u64,
+    policy_revision: u64,
     delta: CapabilityDelta,
 }
 
@@ -116,10 +116,6 @@ enum AuthorizationResult {
 }
 
 impl RpcController {
-    pub fn new(daemon_instance_id: String, store: Arc<Store>) -> Self {
-        Self::new_internal(daemon_instance_id, store, None)
-    }
-
     pub fn new_with_execution(
         daemon_instance_id: String,
         store: Arc<Store>,
@@ -558,11 +554,11 @@ impl RpcController {
 
         let normalized =
             normalize_task_operation(&operation, runtime, &self.state.daemon_instance_id)?;
-        let active_policy = load_active_static_policy(runtime)?;
+        let active_policy = load_active_policy(runtime)?;
         let session_grant = ensure_session_grant(
             &self.state.store,
             &task.session_id,
-            &active_policy.document.capabilities,
+            &active_policy.policy.capabilities,
         )?;
 
         match authorize_interactive(normalized, &active_policy, &session_grant)? {
@@ -591,13 +587,13 @@ impl RpcController {
         })?;
 
         let snapshot = approval_snapshot_from_json(&approval.execution_contract_json)?;
-        let active_policy = load_active_static_policy(runtime)?;
-        if snapshot.static_policy_revision != active_policy.document.revision {
+        let active_policy = load_active_policy(runtime)?;
+        if snapshot.policy_revision != active_policy.policy.revision {
             return Err(err(
                 RpcErrorCode::InvalidTaskState,
                 format!(
-                    "static policy revision changed: approval={}, active={}",
-                    snapshot.static_policy_revision, active_policy.document.revision
+                    "policy revision changed: approval={}, active={}",
+                    snapshot.policy_revision, active_policy.policy.revision
                 ),
             ));
         }
@@ -626,7 +622,7 @@ impl RpcController {
             normalize_task_operation(&snapshot.operation, runtime, &self.state.daemon_instance_id)?;
         let requested = requested_from_normalized(&normalized);
 
-        if !subset_requested_vs_capabilities(&requested, &session_grant.capabilities) {
+        if !requested_within_capabilities(&requested, &session_grant.capabilities) {
             return execute_deny_path(
                 &self.state.store,
                 task,
@@ -680,7 +676,7 @@ impl RpcController {
 
 fn authorize_interactive(
     normalized: af_core::NormalizedOperation,
-    active_policy: &ActiveStaticPolicy,
+    active_policy: &ActivePolicy,
     session_grant: &SessionGrantState,
 ) -> Result<AuthorizationResult, RpcResponse> {
     let requested = requested_from_normalized(&normalized);
@@ -688,7 +684,7 @@ fn authorize_interactive(
     match evaluator.decide(
         &requested,
         &session_grant.capabilities,
-        &active_policy.document,
+        &active_policy.policy,
         EvaluationMode::INTERACTIVE,
     ) {
         CapabilityDecision::Allow => {
@@ -706,7 +702,7 @@ fn authorize_interactive(
                 delta,
                 reason,
                 session_grant_revision: session_grant.revision,
-                static_policy_revision: active_policy.document.revision,
+                policy_revision: active_policy.policy.revision,
             }))
         }
         CapabilityDecision::Deny { reason } => Ok(AuthorizationResult::Deny {
@@ -723,26 +719,26 @@ fn authorize_interactive(
 fn compile_allow_plan(
     normalized: af_core::NormalizedOperation,
     requested: RequestedCapabilities,
-    active_policy: &ActiveStaticPolicy,
+    active_policy: &ActivePolicy,
     session_grant: &SessionGrantState,
 ) -> Result<AllowExecutionPlan, String> {
-    if !subset_capability_set_within_static(
+    if !capability_set_within_policy(
         &session_grant.capabilities,
-        &active_policy.document.capabilities,
+        &active_policy.policy.capabilities,
     ) {
-        return Err("session_grant exceeds static_policy".to_string());
+        return Err("session_grant exceeds policy".to_string());
     }
 
     let by_session = intersect_requested_with_capabilities(&requested, &session_grant.capabilities);
     let effective =
-        intersect_requested_with_capabilities(&by_session, &active_policy.document.capabilities);
+        intersect_requested_with_capabilities(&by_session, &active_policy.policy.capabilities);
 
     let selected = BackendSelector
-        .select(&effective, &active_policy.document)
+        .select(&effective, &active_policy.policy)
         .map_err(|error| format!("backend selection failed: {error}"))?;
 
     let runtime_plan = RuntimeCompiler
-        .compile(&selected, &effective, &active_policy.document)
+        .compile(&selected, &effective, &active_policy.policy)
         .map_err(|error| format!("runtime compile failed: {error}"))?;
 
     Ok(AllowExecutionPlan {
@@ -751,7 +747,7 @@ fn compile_allow_plan(
         effective,
         runtime_plan,
         session_grant_revision: session_grant.revision,
-        static_policy_revision: active_policy.document.revision,
+        policy_revision: active_policy.policy.revision,
     })
 }
 
@@ -912,7 +908,7 @@ fn execute_ask_path(
         &plan.requested,
         &plan.delta,
         plan.session_grant_revision,
-        plan.static_policy_revision,
+        plan.policy_revision,
         &plan.reason,
     );
 
@@ -927,7 +923,7 @@ fn execute_ask_path(
             details,
             items,
             policy_reason: plan.reason.clone(),
-            policy_revision: plan.static_policy_revision,
+            policy_revision: plan.policy_revision,
             execution_contract_json,
             created_at_ms: now,
             expires_at_ms,
@@ -959,7 +955,7 @@ fn execute_ask_path(
                 "requested_capabilities": requested_capabilities_to_json(&plan.requested),
                 "delta_capabilities": capability_delta_to_json(&plan.delta),
                 "session_grant_revision": plan.session_grant_revision,
-                "static_policy_revision": plan.static_policy_revision,
+                "policy_revision": plan.policy_revision,
             })
             .to_string(),
         ),
@@ -1073,9 +1069,9 @@ fn apply_approval_delta_with_cas(
     store: &Store,
     session_id: &str,
     snapshot: &ApprovalSnapshot,
-    active_policy: &ActiveStaticPolicy,
+    active_policy: &ActivePolicy,
 ) -> Result<SessionGrantState, RpcResponse> {
-    let current = ensure_session_grant(store, session_id, &active_policy.document.capabilities)?;
+    let current = ensure_session_grant(store, session_id, &active_policy.policy.capabilities)?;
 
     if current.revision != snapshot.session_grant_revision_before {
         return Err(err(
@@ -1092,10 +1088,10 @@ fn apply_approval_delta_with_cas(
     }
 
     let next = apply_delta_to_capability_set(&current.capabilities, &snapshot.delta);
-    if !subset_capability_set_within_static(&next, &active_policy.document.capabilities) {
+    if !capability_set_within_policy(&next, &active_policy.policy.capabilities) {
         return Err(err(
             RpcErrorCode::PolicyDenied,
-            "approved delta exceeds static policy",
+            "approved delta exceeds policy",
         ));
     }
 
@@ -1168,9 +1164,7 @@ fn normalize_task_operation(
         })
 }
 
-fn load_active_static_policy(
-    runtime: &ExecutionRuntime,
-) -> Result<ActiveStaticPolicy, RpcResponse> {
+fn load_active_policy(runtime: &ExecutionRuntime) -> Result<ActivePolicy, RpcResponse> {
     let policy_runtime = runtime.policy_runtime.lock().map_err(|_| {
         err(
             RpcErrorCode::PolicyLoadFailed,
@@ -1178,7 +1172,7 @@ fn load_active_static_policy(
         )
     })?;
 
-    policy_runtime.active_static_policy().map_err(|error| {
+    policy_runtime.active_policy().map_err(|error| {
         err(
             RpcErrorCode::PolicyLoadFailed,
             format!("load static policy failed: {error}"),
@@ -1451,7 +1445,7 @@ fn failure_execution_result(message: String) -> ExecutionResult {
 fn policy_execution_payload_json(plan: &AllowExecutionPlan) -> String {
     json!({
         "session_grant_revision": plan.session_grant_revision,
-        "static_policy_revision": plan.static_policy_revision,
+        "policy_revision": plan.policy_revision,
         "selected_backend": plan.runtime_plan.backend().as_str(),
         "backend_profile_id": plan.runtime_plan.profile_id(),
         "requested_capabilities": requested_capabilities_to_json(&plan.requested),
@@ -1470,7 +1464,7 @@ fn execution_payload_json(result: &ExecutionResult, plan: &AllowExecutionPlan) -
         "selected_backend": plan.runtime_plan.backend().as_str(),
         "backend_profile_id": plan.runtime_plan.profile_id(),
         "session_grant_revision": plan.session_grant_revision,
-        "static_policy_revision": plan.static_policy_revision,
+        "policy_revision": plan.policy_revision,
     })
     .to_string()
 }
@@ -1690,7 +1684,7 @@ fn approval_snapshot_json(
     requested: &RequestedCapabilities,
     delta: &CapabilityDelta,
     session_grant_revision_before: u64,
-    static_policy_revision: u64,
+    policy_revision: u64,
     reason: &str,
 ) -> String {
     json!({
@@ -1699,7 +1693,7 @@ fn approval_snapshot_json(
         "requested_capabilities": requested_capabilities_to_json(requested),
         "delta_capabilities": capability_delta_to_json(delta),
         "session_grant_revision_before": session_grant_revision_before,
-        "static_policy_revision": static_policy_revision,
+        "policy_revision": policy_revision,
         "reason": reason,
         "reason_codes": requested.reason_codes,
     })
@@ -1755,13 +1749,13 @@ fn approval_snapshot_from_json(raw: &str) -> Result<ApprovalSnapshot, RpcRespons
             )
         })?;
 
-    let static_policy_revision = object
-        .get("static_policy_revision")
+    let policy_revision = object
+        .get("policy_revision")
         .and_then(Value::as_u64)
         .ok_or_else(|| {
             err(
                 RpcErrorCode::InternalError,
-                "approval snapshot missing static_policy_revision",
+                "approval snapshot missing policy_revision",
             )
         })?;
 
@@ -1775,7 +1769,7 @@ fn approval_snapshot_from_json(raw: &str) -> Result<ApprovalSnapshot, RpcRespons
     Ok(ApprovalSnapshot {
         operation: task_operation_from_json(operation)?,
         session_grant_revision_before,
-        static_policy_revision,
+        policy_revision,
         delta: capability_delta_from_json(delta)?,
     })
 }

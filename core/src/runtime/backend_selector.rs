@@ -1,7 +1,7 @@
-use af_policy::{RuntimeBackend, StaticPolicyDocument};
+use af_policy::{RuntimeBackend, StaticPolicy};
 use thiserror::Error;
 
-use crate::capability::{RequestedCapabilities, subset_requested_vs_backend};
+use crate::capability::{RequestedCapabilities, requested_within_backend_limits};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectedBackend {
@@ -11,8 +11,8 @@ pub struct SelectedBackend {
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum BackendSelectionError {
-    #[error("backend `{backend}` capability matrix is missing")]
-    MissingCapabilityMatrix { backend: String },
+    #[error("backend `{backend}` missing capability_limits entry")]
+    MissingCapabilityLimits { backend: String },
     #[error("backend `{backend}` profile is missing")]
     MissingProfile { backend: String },
     #[error("no runtime backend satisfies requested capabilities")]
@@ -26,21 +26,21 @@ impl BackendSelector {
     pub fn select(
         &self,
         requested: &RequestedCapabilities,
-        static_policy: &StaticPolicyDocument,
+        policy: &StaticPolicy,
     ) -> Result<SelectedBackend, BackendSelectionError> {
-        for backend in &static_policy.backends.backend_order {
-            let Some(matrix) = static_policy.backends.capability_matrix.get(backend) else {
-                return Err(BackendSelectionError::MissingCapabilityMatrix {
+        for backend in &policy.backends.backend_order {
+            let Some(limits) = policy.backends.capability_limits.get(backend) else {
+                return Err(BackendSelectionError::MissingCapabilityLimits {
                     backend: backend.as_str().to_string(),
                 });
             };
-            let Some(profile) = static_policy.backends.profiles.get(backend) else {
+            let Some(profile) = policy.backends.profiles.get(backend) else {
                 return Err(BackendSelectionError::MissingProfile {
                     backend: backend.as_str().to_string(),
                 });
             };
 
-            if subset_requested_vs_backend(requested, matrix) {
+            if requested_within_backend_limits(requested, limits) {
                 return Ok(SelectedBackend {
                     backend: *backend,
                     profile_id: profile.profile_id().to_string(),
@@ -55,14 +55,14 @@ impl BackendSelector {
 #[cfg(test)]
 mod tests {
     use af_policy::{
-        BackendCapabilitySet, BackendProfile, BackendResourceLimits, BackendStaticPolicy,
-        CapabilitySet, DefaultAction, RuntimeBackend, SandboxProfile, StaticPolicyDocument,
+        BackendCapabilityLimits, BackendPolicy, BackendProfile, BackendResourceLimits,
+        CapabilitySet, DefaultAction, RuntimeBackend, SandboxProfile, StaticPolicy,
     };
 
     use super::*;
 
-    fn static_policy() -> StaticPolicyDocument {
-        StaticPolicyDocument {
+    fn policy_fixture() -> StaticPolicy {
+        StaticPolicy {
             version: 1,
             revision: 1,
             default_action: DefaultAction::Deny,
@@ -76,11 +76,11 @@ mod tests {
                 allow_privilege: false,
                 allow_credential_access: false,
             },
-            backends: BackendStaticPolicy {
+            backends: BackendPolicy {
                 backend_order: vec![RuntimeBackend::Sandbox],
-                capability_matrix: [(
+                capability_limits: [(
                     RuntimeBackend::Sandbox,
-                    BackendCapabilitySet {
+                    BackendCapabilityLimits {
                         fs_read: vec!["/work/**".to_string()],
                         fs_write: vec!["/work/**".to_string()],
                         fs_delete: vec!["/work/**".to_string()],
@@ -126,7 +126,7 @@ mod tests {
         };
 
         let selected = BackendSelector
-            .select(&requested, &static_policy())
+            .select(&requested, &policy_fixture())
             .expect("select backend");
 
         assert_eq!(selected.backend, RuntimeBackend::Sandbox);

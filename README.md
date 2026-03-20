@@ -135,7 +135,7 @@ capabilities:
   allow_credential_access: false
 backends:
   backend_order: ["sandbox"]
-  capability_matrix:
+  capability_limits:
     sandbox:
       fs_read: ["/home/**", "/tmp/**", "/etc/ssl/**"]
       fs_write: ["/home/**", "/tmp/**"]

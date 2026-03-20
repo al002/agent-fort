@@ -47,17 +47,6 @@ pub(crate) fn configure_connection(
     Ok(())
 }
 
-pub(crate) fn now_ms() -> u64 {
-    let now = std::time::SystemTime::now();
-    let elapsed = now
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock is after unix epoch");
-    elapsed
-        .as_millis()
-        .try_into()
-        .expect("timestamp fits into u64")
-}
-
 fn ensure_parent_dir_exists(path: &Path) -> StoreResult<()> {
     if is_memory_path(path) {
         return Ok(());

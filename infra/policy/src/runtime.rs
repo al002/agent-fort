@@ -2,14 +2,13 @@ use std::sync::mpsc;
 use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
 
-use af_policy::StaticPolicyDocument;
+use af_policy::StaticPolicy;
 use tracing::{info, warn};
 
-use crate::debounce::merge_debounced;
-use crate::yaml_parser::LoadedStaticPolicy;
+use crate::static_policy_parser::LoadedPolicy;
 use crate::{
-    PolicyDirectoryLoader, PolicyDirectoryWatcher, PolicyInfraError, PolicyInfraResult,
-    PolicyReloadError, PolicyRuntimeConfig, PolicyStatus, YamlParser,
+    PolicyDirectoryWatcher, PolicyInfraError, PolicyInfraResult, PolicyReloadError,
+    PolicyRuntimeConfig, PolicyStatus, StaticPolicyParser,
 };
 
 pub struct PolicyRuntime {
@@ -20,15 +19,14 @@ pub struct PolicyRuntime {
 }
 
 #[derive(Debug, Clone)]
-pub struct ActiveStaticPolicy {
+pub struct ActivePolicy {
     pub revision: u64,
-    pub file_count: usize,
-    pub document: Arc<StaticPolicyDocument>,
+    pub policy: Arc<StaticPolicy>,
 }
 
 #[derive(Debug)]
 struct RuntimeState {
-    active: ActiveStaticPolicy,
+    active: ActivePolicy,
     last_reload_error: Option<PolicyReloadError>,
 }
 
@@ -70,7 +68,7 @@ impl PolicyRuntime {
         &self.config
     }
 
-    pub fn active_static_policy(&self) -> PolicyInfraResult<ActiveStaticPolicy> {
+    pub fn active_policy(&self) -> PolicyInfraResult<ActivePolicy> {
         Ok(self.read_state()?.active.clone())
     }
 
@@ -78,8 +76,7 @@ impl PolicyRuntime {
         let state = self.read_state()?;
         Ok(PolicyStatus {
             revision: state.active.revision,
-            file_count: state.active.file_count,
-            static_policy_revision: state.active.document.revision,
+            policy_revision: state.active.policy.revision,
             last_reload_error: state.last_reload_error.clone(),
         })
     }
@@ -111,24 +108,17 @@ fn run_reload_worker(
             return;
         }
 
-        let first = match watcher.recv_timeout(config.poll_interval) {
-            Ok(Some(event)) => event,
+        let changed = match watcher.recv_timeout(config.poll_interval) {
+            Ok(Some(())) => true,
             Ok(None) => continue,
             Err(error) => {
                 stop_worker(&state, "policy watcher stopped", &error);
                 return;
             }
         };
-
-        let merged = match merge_debounced(first, config.debounce, |timeout| {
-            watcher.recv_timeout(timeout)
-        }) {
-            Ok(event) => event,
-            Err(error) => {
-                stop_worker(&state, "policy watcher debounce failed", &error);
-                return;
-            }
-        };
+        if !changed {
+            continue;
+        }
 
         let next_runtime_revision = match state.read() {
             Ok(guard) => guard.active.revision + 1,
@@ -140,8 +130,7 @@ fn run_reload_worker(
 
         match load_static_policy(&config, next_runtime_revision) {
             Ok(active) => {
-                let static_policy_revision = active.document.revision;
-                let file_count = active.file_count;
+                let policy_revision = active.policy.revision;
                 match state.write() {
                     Ok(mut guard) => {
                         guard.active = active;
@@ -154,16 +143,12 @@ fn run_reload_worker(
                 }
                 info!(
                     runtime_revision = next_runtime_revision,
-                    static_policy_revision,
-                    file_count,
-                    changed_paths = ?merged.paths,
-                    "policy reload applied"
+                    policy_revision, "policy reload applied"
                 );
             }
             Err(error) => {
                 warn!(
                     runtime_revision = next_runtime_revision,
-                    changed_paths = ?merged.paths,
                     error = %error,
                     "policy reload rejected; keeping previous snapshot"
                 );
@@ -198,14 +183,12 @@ fn record_reload_error(
 fn load_static_policy(
     config: &PolicyRuntimeConfig,
     runtime_revision: u64,
-) -> PolicyInfraResult<ActiveStaticPolicy> {
-    let loaded: LoadedStaticPolicy =
-        YamlParser.parse_static_policy(PolicyDirectoryLoader::new(config.root.clone()).load()?)?;
+) -> PolicyInfraResult<ActivePolicy> {
+    let loaded: LoadedPolicy = StaticPolicyParser.parse(&config.root)?;
 
-    Ok(ActiveStaticPolicy {
+    Ok(ActivePolicy {
         revision: runtime_revision,
-        file_count: loaded.snapshot.file_count(),
-        document: Arc::new(loaded.document),
+        policy: Arc::new(loaded.policy),
     })
 }
 
@@ -226,18 +209,15 @@ mod tests {
         fs::write(root.join("static_policy.yaml"), policy_yaml(1)).expect("write policy");
 
         let runtime = PolicyRuntime::start(
-            PolicyRuntimeConfig::new(&root)
-                .with_debounce(Duration::from_millis(30))
-                .with_poll_interval(Duration::from_millis(20)),
+            PolicyRuntimeConfig::new(&root).with_poll_interval(Duration::from_millis(20)),
         )
         .expect("start runtime");
 
         let active = runtime
-            .active_static_policy()
+            .active_policy()
             .expect("read active policy snapshot");
         assert_eq!(active.revision, 1);
-        assert_eq!(active.document.revision, 1);
-        assert_eq!(active.file_count, 1);
+        assert_eq!(active.policy.revision, 1);
     }
 
     #[test]
@@ -248,18 +228,16 @@ mod tests {
         fs::write(root.join("static_policy.yaml"), policy_yaml(1)).expect("write policy");
 
         let runtime = PolicyRuntime::start(
-            PolicyRuntimeConfig::new(&root)
-                .with_debounce(Duration::from_millis(30))
-                .with_poll_interval(Duration::from_millis(20)),
+            PolicyRuntimeConfig::new(&root).with_poll_interval(Duration::from_millis(20)),
         )
         .expect("start runtime");
 
         fs::write(root.join("static_policy.yaml"), policy_yaml(2)).expect("update policy");
         wait_until_runtime_revision(&runtime, 2);
 
-        let active = runtime.active_static_policy().expect("read active policy");
+        let active = runtime.active_policy().expect("read active policy");
         assert_eq!(active.revision, 2);
-        assert_eq!(active.document.revision, 2);
+        assert_eq!(active.policy.revision, 2);
     }
 
     #[test]
@@ -270,9 +248,7 @@ mod tests {
         fs::write(root.join("static_policy.yaml"), policy_yaml(1)).expect("write policy");
 
         let runtime = PolicyRuntime::start(
-            PolicyRuntimeConfig::new(&root)
-                .with_debounce(Duration::from_millis(30))
-                .with_poll_interval(Duration::from_millis(20)),
+            PolicyRuntimeConfig::new(&root).with_poll_interval(Duration::from_millis(20)),
         )
         .expect("start runtime");
 
@@ -283,8 +259,8 @@ mod tests {
         .expect("write invalid policy");
 
         wait_until_error(&runtime);
-        let active = runtime.active_static_policy().expect("active policy");
-        assert_eq!(active.document.revision, 1);
+        let active = runtime.active_policy().expect("active policy");
+        assert_eq!(active.policy.revision, 1);
         assert_eq!(active.revision, 1);
     }
 
@@ -335,7 +311,7 @@ capabilities:
   allow_credential_access: false
 backends:
   backend_order: ["sandbox"]
-  capability_matrix:
+  capability_limits:
     sandbox:
       fs_read: ["/work/**"]
       fs_write: ["/work/**"]

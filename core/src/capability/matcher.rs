@@ -274,7 +274,9 @@ pub fn endpoint_matches_rule(endpoint: &NetEndpoint, rule: &NetRule) -> bool {
     let endpoint_host = normalize_host(endpoint.host.as_str());
     let rule_host = normalize_host(rule.host.as_str());
 
-    let host_match = if let Some(suffix) = rule_host.strip_prefix('.') {
+    let host_match = if rule_host == "*" {
+        true
+    } else if let Some(suffix) = rule_host.strip_prefix('.') {
         endpoint_host.ends_with(rule_host.as_str()) || endpoint_host == suffix
     } else {
         endpoint_host == rule_host
@@ -314,7 +316,9 @@ fn host_rule_covers(allow_host: &str, requested_host: &str) -> bool {
     let allow = normalize_host(allow_host);
     let requested = normalize_host(requested_host);
 
-    if let Some(suffix) = allow.strip_prefix('.') {
+    if allow == "*" {
+        true
+    } else if let Some(suffix) = allow.strip_prefix('.') {
         requested.ends_with(allow.as_str()) || requested == suffix
     } else {
         allow == requested
@@ -380,6 +384,52 @@ mod tests {
         };
 
         assert!(endpoint_matches_rule(&endpoint, &rule));
+    }
+
+    #[test]
+    fn endpoint_star_rule_matches_any_host() {
+        let endpoint = NetEndpoint::new("random-host.local", Some(443), Some("https".to_string()));
+        let rule = NetRule {
+            host: "*".to_string(),
+            port: Some(443),
+            protocol: Some("https".to_string()),
+        };
+
+        assert!(endpoint_matches_rule(&endpoint, &rule));
+    }
+
+    #[test]
+    fn wildcard_host_in_policy_covers_any_session_host() {
+        let session_grant = CapabilitySet {
+            fs_read: Vec::new(),
+            fs_write: Vec::new(),
+            fs_delete: Vec::new(),
+            net_connect: vec![NetRule {
+                host: "example.com".to_string(),
+                port: Some(443),
+                protocol: Some("https".to_string()),
+            }],
+            allow_host_exec: false,
+            allow_process_control: false,
+            allow_privilege: false,
+            allow_credential_access: false,
+        };
+        let policy = CapabilitySet {
+            fs_read: Vec::new(),
+            fs_write: Vec::new(),
+            fs_delete: Vec::new(),
+            net_connect: vec![NetRule {
+                host: "*".to_string(),
+                port: None,
+                protocol: None,
+            }],
+            allow_host_exec: false,
+            allow_process_control: false,
+            allow_privilege: false,
+            allow_credential_access: false,
+        };
+
+        assert!(capability_set_within_policy(&session_grant, &policy));
     }
 
     #[test]

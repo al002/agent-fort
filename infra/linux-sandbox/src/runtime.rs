@@ -117,6 +117,18 @@ impl SandboxRuntime for LinuxSandboxRuntime {
             .map_err(|err| SandboxError::Spawn(format!("spawn sandboxed process failed: {err}")))?;
         drop(preserved_fds);
 
+        if let Some(stdin) = request.stdin.as_ref() {
+            let mut child_stdin = child
+                .stdin
+                .take()
+                .ok_or_else(|| SandboxError::Execute("stdin pipe was not available".to_string()))?;
+            use std::io::Write;
+            child_stdin
+                .write_all(stdin.as_bytes())
+                .map_err(|err| SandboxError::Execute(format!("write stdin failed: {err}")))?;
+            drop(child_stdin);
+        }
+
         let cgroup = match attach_process(
             &self.config.cgroup_root,
             child.id(),
@@ -214,7 +226,11 @@ impl LinuxSandboxRuntime {
         };
 
         prepared.command.current_dir(&request.cwd);
-        prepared.command.stdin(Stdio::null());
+        if request.stdin.is_some() {
+            prepared.command.stdin(Stdio::piped());
+        } else {
+            prepared.command.stdin(Stdio::null());
+        }
         prepared.command.stdout(Stdio::piped());
         prepared.command.stderr(Stdio::piped());
         apply_environment(
@@ -546,6 +562,7 @@ mod tests {
             command,
             cwd: PathBuf::from("/tmp"),
             env: BTreeMap::new(),
+            stdin: None,
             filesystem: FilesystemPolicy {
                 mode: FilesystemMode::FullAccess,
                 include_platform_defaults: false,
@@ -602,6 +619,21 @@ mod tests {
 
         let result = runtime.execute(request).expect("execute request");
         assert!(result.timed_out);
+    }
+
+    #[test]
+    fn writes_stdin_into_child_process() {
+        let runtime = LinuxSandboxRuntime::default();
+        let mut request = full_access_request(vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "cat".to_string(),
+        ]);
+        request.stdin = Some("stdin-ok".to_string());
+
+        let result = runtime.execute(request).expect("execute request");
+        assert_eq!(result.exit_code, Some(0));
+        assert_eq!(result.stdout, "stdin-ok");
     }
 
     #[test]

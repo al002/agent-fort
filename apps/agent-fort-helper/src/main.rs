@@ -1,4 +1,3 @@
-use std::env;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
@@ -8,9 +7,6 @@ use af_sandbox::{
     SandboxRuntime,
 };
 use anyhow::{Context, Result, bail};
-
-const ENV_BWRAP_PATH: &str = "AF_BWRAP_PATH";
-const ENV_CGROUP_ROOT: &str = "AF_CGROUP_ROOT";
 
 fn main() {
     if let Err(err) = run() {
@@ -58,11 +54,27 @@ fn run() -> Result<()> {
 
 fn resolve_linux_sandbox_config() -> LinuxSandboxConfig {
     let mut config = LinuxSandboxConfig::default();
-    if let Ok(path) = env::var(ENV_BWRAP_PATH) {
-        config.bwrap_path = PathBuf::from(path);
-    }
-    if let Ok(path) = env::var(ENV_CGROUP_ROOT) {
-        config.cgroup_root = PathBuf::from(path);
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--bwrap-path" => {
+                if let Some(value) = args.get(i + 1) {
+                    config.bwrap_path = PathBuf::from(value);
+                    i += 2;
+                    continue;
+                }
+            }
+            "--cgroup-root" => {
+                if let Some(value) = args.get(i + 1) {
+                    config.cgroup_root = PathBuf::from(value);
+                    i += 2;
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
     }
     config
 }

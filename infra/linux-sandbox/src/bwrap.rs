@@ -263,6 +263,7 @@ mod tests {
             command: vec!["/bin/echo".to_string(), "ok".to_string()],
             cwd: "/tmp".into(),
             env: BTreeMap::new(),
+            stdin: None,
             filesystem: FilesystemPolicy {
                 mode: FilesystemMode::ReadOnly,
                 include_platform_defaults: true,

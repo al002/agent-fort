@@ -18,37 +18,6 @@ pub(super) fn validate_task_operation(operation: Option<&TaskOperation>) -> Opti
         ));
     }
 
-    let payload = struct_to_json(operation.payload.as_ref());
-    let options = struct_to_json(operation.options.as_ref());
-
-    if let Some(path) = find_forbidden_runtime_override_key(&payload, "payload") {
-        return Some(err(
-            RpcErrorCode::BadRequest,
-            format!("runtime override is not allowed in task operation: {path}"),
-        ));
-    }
-    if let Some(path) = find_forbidden_runtime_override_key(&options, "options") {
-        return Some(err(
-            RpcErrorCode::BadRequest,
-            format!("runtime override is not allowed in task operation: {path}"),
-        ));
-    }
-
-    for key in operation.labels.keys() {
-        let lower = key.trim().to_ascii_lowercase();
-        if lower == "backend"
-            || lower == "runtime_backend"
-            || lower.starts_with("sandbox.")
-            || lower.starts_with("runtime.")
-            || lower.starts_with("backend.")
-        {
-            return Some(err(
-                RpcErrorCode::BadRequest,
-                format!("runtime override label is not allowed: {key}"),
-            ));
-        }
-    }
-
     None
 }
 
@@ -128,41 +97,6 @@ pub(super) fn struct_to_json(value: Option<&prost_types::Struct>) -> Value {
         .collect::<serde_json::Map<String, Value>>();
 
     Value::Object(map)
-}
-
-fn find_forbidden_runtime_override_key(value: &Value, prefix: &str) -> Option<String> {
-    const FORBIDDEN: [&str; 9] = [
-        "sandbox",
-        "sandbox_overrides",
-        "backend",
-        "runtime_backend",
-        "backend_override",
-        "filesystem_mode",
-        "governance_mode",
-        "syscall_policy",
-        "mounts",
-    ];
-
-    match value {
-        Value::Object(object) => {
-            for (key, value) in object {
-                let lower = key.to_ascii_lowercase();
-                if FORBIDDEN.contains(&lower.as_str()) {
-                    return Some(format!("{prefix}.{key}"));
-                }
-                if let Some(found) =
-                    find_forbidden_runtime_override_key(value, &format!("{prefix}.{key}"))
-                {
-                    return Some(found);
-                }
-            }
-            None
-        }
-        Value::Array(list) => list.iter().enumerate().find_map(|(index, item)| {
-            find_forbidden_runtime_override_key(item, &format!("{prefix}[{index}]"))
-        }),
-        _ => None,
-    }
 }
 
 fn maybe_json_to_prost_struct(

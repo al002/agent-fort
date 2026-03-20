@@ -13,15 +13,15 @@ mod process;
 mod source;
 
 pub use paths::{
-    bootstrap_path_lookup_order_hint, default_endpoint_uri, default_install_root_path,
-    default_manifest_path, default_policy_dir_path, install_root_has_manifest,
+    bootstrap_path_lookup_order_hint, default_command_rules_dir_path, default_endpoint_uri,
+    default_install_root_path, default_manifest_path, default_policy_dir_path,
+    install_root_has_manifest,
 };
 
 const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_STARTUP_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_PING_INTERVAL_MS: u64 = 200;
 const DEFAULT_LOCAL_DEV_BOOTSTRAP_DIR: &str = "target/debug";
-const ENV_POLICY_DIR: &str = "AF_POLICY_DIR";
 const EXPECTED_BOOTSTRAP_SHA256_LINUX_X86_64: &str =
     "e935437defc54009b8cddbd8b946f9b1f5a20feb71cef5c0fdac32c4f6e3e0c3";
 
@@ -76,9 +76,22 @@ pub struct BootstrapConfig {
     pub endpoint: Option<String>,
     /// Policy directory passed to bootstrap `start`.
     ///
-    /// If not provided, SDK checks `AF_POLICY_DIR` and then defaults to
-    /// `<current_dir>/policies`.
+    /// If not provided, defaults to platform config dir:
+    /// - Linux: `$XDG_CONFIG_HOME/agent-fort/policies` or `~/.config/agent-fort/policies`
+    /// - Windows: `%APPDATA%\\AgentFort\\policies`
     pub policy_dir: Option<PathBuf>,
+    /// Command rules directory passed to bootstrap `start`.
+    ///
+    /// If not provided, defaults to platform config dir:
+    /// - Linux: `$XDG_CONFIG_HOME/agent-fort/command-rules` or
+    ///   `~/.config/agent-fort/command-rules`
+    /// - Windows: `%APPDATA%\\AgentFort\\command-rules`
+    pub command_rules_dir: Option<PathBuf>,
+    /// Optional strict mode for command rule parsing.
+    ///
+    /// When set, SDK passes `--command-rules-strict <BOOL>` to bootstrap `start`.
+    /// If omitted, daemon runtime default is used.
+    pub command_rules_strict: Option<bool>,
     /// Optional store path passed to bootstrap `start`.
     pub store_path: Option<PathBuf>,
 }
@@ -177,6 +190,8 @@ struct ResolvedBootstrapConfig {
     bundle_manifest: Option<String>,
     endpoint: String,
     policy_dir: PathBuf,
+    command_rules_dir: PathBuf,
+    command_rules_strict: Option<bool>,
     store_path: Option<PathBuf>,
 }
 
@@ -262,9 +277,15 @@ impl BootstrapRunner {
             self.config
                 .policy_dir
                 .clone()
-                .or_else(|| std::env::var_os(ENV_POLICY_DIR).map(PathBuf::from))
                 .unwrap_or_else(paths::default_policy_dir),
         )?;
+        let command_rules_dir = self
+            .config
+            .command_rules_dir
+            .clone()
+            .unwrap_or_else(paths::default_command_rules_dir);
+        let command_rules_dir = paths::resolve_policy_dir(command_rules_dir)?;
+        let command_rules_strict = self.config.command_rules_strict;
 
         Ok(ResolvedBootstrapConfig {
             bootstrap_binary_url,
@@ -272,6 +293,8 @@ impl BootstrapRunner {
             bundle_manifest: self.config.bundle_manifest.clone(),
             endpoint,
             policy_dir,
+            command_rules_dir,
+            command_rules_strict,
             store_path: self.config.store_path.clone(),
         })
     }

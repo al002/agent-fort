@@ -50,11 +50,7 @@ impl PolicyRuntime {
             last_reload_error: None,
         }));
 
-        let mut watch_roots = vec![config.root.clone()];
-        if let Some(command_rules) = config.command_rules.as_ref() {
-            watch_roots.push(command_rules.root.clone());
-        }
-        let watcher = PolicyDirectoryWatcher::start_many(watch_roots)?;
+        let watcher = PolicyDirectoryWatcher::start_many(config.watch_roots())?;
         let (stop_tx, stop_rx) = mpsc::channel();
         let worker_state = Arc::clone(&state);
         let worker_config = config.clone();

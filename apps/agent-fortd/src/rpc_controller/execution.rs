@@ -38,7 +38,11 @@ pub(super) fn execute_allow_path(
                 let mut result = failure_execution_result(error_message);
                 result.effects = build_execution_effects(
                     &plan.effective,
-                    &command_from_normalized(plan.normalized.command.as_ref()).unwrap_or_default(),
+                    &command_from_normalized(
+                        plan.normalized.command.as_ref(),
+                        plan.normalized.shell.as_deref(),
+                    )
+                    .unwrap_or_default(),
                 );
                 result
             }
@@ -457,7 +461,7 @@ fn build_sandbox_request(
         }
     };
 
-    let command = command_from_normalized(normalized.command.as_ref())
+    let command = command_from_normalized(normalized.command.as_ref(), normalized.shell.as_deref())
         .ok_or_else(|| "task operation command is required for execution".to_string())?;
 
     let cwd = normalized
@@ -493,6 +497,7 @@ fn build_sandbox_request(
         command,
         cwd,
         env: normalized.env.clone(),
+        stdin: normalized.stdin.clone(),
         filesystem: FilesystemPolicy {
             mode: FilesystemMode::Restricted,
             include_platform_defaults: true,
@@ -570,15 +575,50 @@ fn pattern_to_root(pattern: &str) -> Option<PathBuf> {
     if path.is_absolute() { Some(path) } else { None }
 }
 
-fn command_from_normalized(command: Option<&NormalizedCommand>) -> Option<Vec<String>> {
+fn command_from_normalized(
+    command: Option<&NormalizedCommand>,
+    shell: Option<&str>,
+) -> Option<Vec<String>> {
     match command {
         Some(NormalizedCommand::Shell(command)) => Some(vec![
-            "/bin/sh".to_string(),
+            shell
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("/bin/sh")
+                .to_string(),
             "-c".to_string(),
             command.clone(),
         ]),
         Some(NormalizedCommand::Argv(argv)) if !argv.is_empty() => Some(argv.clone()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_from_normalized_uses_custom_shell_for_shell_command() {
+        let command = command_from_normalized(
+            Some(&NormalizedCommand::Shell("echo hi".to_string())),
+            Some("/bin/bash"),
+        )
+        .expect("command");
+        assert_eq!(command, vec!["/bin/bash", "-c", "echo hi"]);
+    }
+
+    #[test]
+    fn command_from_normalized_keeps_argv_unchanged() {
+        let command = command_from_normalized(
+            Some(&NormalizedCommand::Argv(vec![
+                "/usr/bin/env".to_string(),
+                "true".to_string(),
+            ])),
+            Some("/bin/bash"),
+        )
+        .expect("command");
+        assert_eq!(command, vec!["/usr/bin/env", "true"]);
     }
 }
 

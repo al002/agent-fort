@@ -46,6 +46,8 @@ impl OperationNormalizer {
             runtime.workspace_root.as_deref(),
         );
         let env = extract_env(&raw.payload, &raw.options)?;
+        let stdin = extract_stdin(&raw.payload, &raw.options)?;
+        let shell = extract_shell(&raw.payload, &raw.options)?;
 
         let mut paths = extract_paths(&raw.payload, runtime.workspace_root.as_deref());
         paths.extend(extract_paths(
@@ -78,6 +80,8 @@ impl OperationNormalizer {
             command,
             cwd,
             env,
+            stdin,
+            shell,
             paths,
             hosts,
             reason_codes,
@@ -95,6 +99,10 @@ pub enum NormalizeError {
     InvalidCommand { message: String },
     #[error("operation env is invalid: {message}")]
     InvalidEnv { message: String },
+    #[error("operation stdin is invalid: {message}")]
+    InvalidStdin { message: String },
+    #[error("operation shell is invalid: {message}")]
+    InvalidShell { message: String },
 }
 
 fn normalize_kind(kind: &str) -> OperationKind {
@@ -182,6 +190,40 @@ fn extract_env(
         env.insert(key.clone(), text.to_string());
     }
     Ok(env)
+}
+
+fn extract_stdin(payload: &Value, options: &Value) -> Result<Option<String>, NormalizeError> {
+    let value = find_value(payload, "stdin").or_else(|| find_value(options, "stdin"));
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    match value {
+        Value::String(text) => Ok(Some(text.clone())),
+        _ => Err(NormalizeError::InvalidStdin {
+            message: "stdin must be string".to_string(),
+        }),
+    }
+}
+
+fn extract_shell(payload: &Value, options: &Value) -> Result<Option<String>, NormalizeError> {
+    let value = find_value(payload, "shell").or_else(|| find_value(options, "shell"));
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    match value {
+        Value::String(shell) => {
+            let trimmed = shell.trim();
+            if trimmed.is_empty() {
+                return Err(NormalizeError::InvalidShell {
+                    message: "shell string must not be empty".to_string(),
+                });
+            }
+            Ok(Some(trimmed.to_string()))
+        }
+        _ => Err(NormalizeError::InvalidShell {
+            message: "shell must be string".to_string(),
+        }),
+    }
 }
 
 fn extract_cwd(payload: &Value, options: &Value, workspace_root: Option<&Path>) -> Option<PathBuf> {
@@ -412,7 +454,10 @@ mod tests {
                 "output": "./out.log",
                 "url": "https://example.com/path"
             }),
-            options: serde_json::json!({}),
+            options: serde_json::json!({
+                "stdin": "hello",
+                "shell": "/bin/bash"
+            }),
             labels: BTreeMap::new(),
         };
 
@@ -426,6 +471,8 @@ mod tests {
             Some(NormalizedCommand::Shell("cat ./a.txt".to_string()))
         );
         assert_eq!(normalized.cwd, Some(PathBuf::from("/work/project")));
+        assert_eq!(normalized.stdin.as_deref(), Some("hello"));
+        assert_eq!(normalized.shell.as_deref(), Some("/bin/bash"));
         assert!(normalized.paths.contains(&PathBuf::from("/work/out.log")));
         assert_eq!(normalized.hosts, vec!["example.com".to_string()]);
         assert!(!normalized.unknown);

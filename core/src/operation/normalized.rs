@@ -12,6 +12,8 @@ pub struct NormalizedOperation {
     pub command: Option<NormalizedCommand>,
     pub cwd: Option<PathBuf>,
     pub env: BTreeMap<String, String>,
+    pub stdin: Option<String>,
+    pub shell: Option<String>,
     pub paths: Vec<PathBuf>,
     pub hosts: Vec<String>,
     pub reason_codes: Vec<String>,

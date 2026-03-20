@@ -37,6 +37,16 @@ impl PolicyRuntimeConfig {
         self.poll_interval = poll_interval;
         self
     }
+
+    pub fn watch_roots(&self) -> Vec<PathBuf> {
+        let mut roots = vec![self.root.clone()];
+        if let Some(command_rules) = self.command_rules.as_ref() {
+            roots.push(command_rules.root.clone());
+        }
+        roots.sort();
+        roots.dedup();
+        roots
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,4 +62,43 @@ pub struct PolicyStatus {
     pub command_rules_revision: u64,
     pub command_rules_count: usize,
     pub last_reload_error: Option<PolicyReloadError>,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    #[test]
+    fn watch_roots_contains_policy_root_without_command_rules() {
+        let config = PolicyRuntimeConfig::new("/workspace/policies");
+        assert_eq!(
+            config.watch_roots(),
+            vec![PathBuf::from("/workspace/policies")]
+        );
+    }
+
+    #[test]
+    fn watch_roots_dedupes_policy_and_command_rules_root() {
+        let config = PolicyRuntimeConfig::new("/workspace/policies")
+            .with_command_rules("/workspace/policies", true);
+        assert_eq!(
+            config.watch_roots(),
+            vec![PathBuf::from("/workspace/policies")]
+        );
+    }
+
+    #[test]
+    fn watch_roots_contains_both_policy_and_command_rules_roots() {
+        let config = PolicyRuntimeConfig::new("/workspace/policies")
+            .with_command_rules("/workspace/command-rules", true);
+        assert_eq!(
+            config.watch_roots(),
+            vec![
+                PathBuf::from("/workspace/command-rules"),
+                PathBuf::from("/workspace/policies"),
+            ]
+        );
+    }
 }

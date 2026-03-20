@@ -59,6 +59,12 @@ impl SdkConfig {
                     .or(defaults.bundle_manifest),
                 endpoint: override_bootstrap.endpoint.or(defaults.endpoint),
                 policy_dir: override_bootstrap.policy_dir.or(defaults.policy_dir),
+                command_rules_dir: override_bootstrap
+                    .command_rules_dir
+                    .or(defaults.command_rules_dir),
+                command_rules_strict: override_bootstrap
+                    .command_rules_strict
+                    .or(defaults.command_rules_strict),
                 store_path: override_bootstrap.store_path.or(defaults.store_path),
             },
             None => defaults,

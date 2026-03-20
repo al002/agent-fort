@@ -96,12 +96,15 @@ pub use approval::ApprovalClient;
 pub use bootstrap::{
     BootstrapConfig, BootstrapRunResult, BootstrapRunner, BootstrapStartOutput,
     BootstrapSyncOutput, BootstrapSyncResult, bootstrap_path_lookup_order_hint,
-    default_endpoint_uri, default_install_root_path, default_manifest_path,
-    default_policy_dir_path, install_root_has_manifest,
+    default_command_rules_dir_path, default_endpoint_uri, default_install_root_path,
+    default_manifest_path, default_policy_dir_path, install_root_has_manifest,
 };
 pub use client::{AgentFortClient, SdkConfig};
 pub use error::{Result, SdkError};
-pub use operation::exec_operation;
+pub use operation::{
+    ACTION_SCHEMA_V1, ActionOptions, ActionTaskRequest, build_exec_action_json, exec_operation,
+    parse_action_json, parse_action_value,
+};
 pub use runtime::{CreateSessionOptions, RuntimeClient};
 pub use session::SessionClient;
 pub use task::TaskClient;

@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -16,6 +16,7 @@ use crate::command::{
 
 const MAX_FRAME_LEN: usize = 8 * 1024 * 1024;
 const IO_TIMEOUT_MS: u64 = 500;
+const SYSTEM_BWRAP_PATH: &str = "/usr/bin/bwrap";
 
 #[derive(Debug, Serialize)]
 pub struct StartOutput {
@@ -30,20 +31,20 @@ pub fn run(args: StartArgs) -> Result<StartOutput> {
     let install_root = resolve_install_root(args.install_root);
     let mut state = InstallState::load(&install_root)?;
     let endpoint = resolve_endpoint(args.endpoint, Some(&state));
+    let policy_dir = resolve_dir_path(args.policy_dir, default_policy_dir)?;
+    ensure_policy_exists(&policy_dir)?;
+    let command_rules_dir = resolve_dir_path(args.command_rules_dir, default_command_rules_dir)?;
     state.endpoint = endpoint.clone();
     if let Some(path) = args.daemon_path {
         state.daemon_path = path;
-    }
-    if let Some(path) = args.bwrap_path {
-        state.bwrap_path = path;
     }
     if let Some(path) = args.helper_path {
         state.helper_path = path;
     }
 
     ensure_file(&state.daemon_path, "daemon binary")?;
-    ensure_file(&state.bwrap_path, "bwrap binary")?;
     ensure_file(&state.helper_path, "helper binary")?;
+    let bwrap_path = resolve_bwrap_path(args.bwrap_path.as_deref(), &state.bwrap_path)?;
 
     if let Ok(response) = ping_once(&endpoint) {
         return Ok(StartOutput {
@@ -58,10 +59,10 @@ pub fn run(args: StartArgs) -> Result<StartOutput> {
     let daemon_pid = spawn_daemon(
         &state.daemon_path,
         &endpoint,
-        &state.bwrap_path,
+        &bwrap_path,
         &state.helper_path,
-        args.policy_dir.as_deref(),
-        args.command_rules_dir.as_deref(),
+        Some(policy_dir.as_path()),
+        Some(command_rules_dir.as_path()),
         args.command_rules_strict,
         args.store_path.as_deref(),
     )?;
@@ -202,30 +203,32 @@ fn spawn_daemon(
 ) -> Result<u32> {
     let mut command = Command::new(daemon_path);
     command
-        .env("AF_DAEMON_ENDPOINT", endpoint)
-        .env("AF_BWRAP_PATH", bwrap_path)
-        .env("AF_HELPER_PATH", helper_path)
+        .arg("--endpoint")
+        .arg(endpoint)
+        .arg("--bwrap-path")
+        .arg(bwrap_path)
+        .arg("--helper-path")
+        .arg(helper_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     if let Some(policy_dir) = policy_dir {
-        command.env("AF_POLICY_DIR", policy_dir);
+        command.arg("--policy-dir").arg(policy_dir);
     }
     if let Some(command_rules_dir) = command_rules_dir {
-        command.env("AF_COMMAND_RULES_DIR", command_rules_dir);
+        command.arg("--command-rules-dir").arg(command_rules_dir);
     }
     if let Some(command_rules_strict) = command_rules_strict {
-        command.env(
-            "AF_COMMAND_RULES_STRICT",
-            if command_rules_strict {
+        command
+            .arg("--command-rules-strict")
+            .arg(if command_rules_strict {
                 "true"
             } else {
                 "false"
-            },
-        );
+            });
     }
     if let Some(store_path) = store_path {
-        command.env("AF_STORE_PATH", store_path);
+        command.arg("--store-path").arg(store_path);
     }
 
     let child = command
@@ -239,6 +242,110 @@ fn ensure_file(path: &Path, label: &str) -> Result<()> {
         bail!("{label} not found at {}", path.display());
     }
     Ok(())
+}
+
+fn ensure_policy_exists(policy_dir: &Path) -> Result<()> {
+    let yaml = policy_dir.join("static_policy.yaml");
+    if yaml.is_file() {
+        return Ok(());
+    }
+    let yml = policy_dir.join("static_policy.yml");
+    if yml.is_file() {
+        return Ok(());
+    }
+    bail!(
+        "policy is required: expected {} or {}",
+        yaml.display(),
+        yml.display()
+    );
+}
+
+fn resolve_bwrap_path(explicit: Option<&Path>, bundled: &Path) -> Result<PathBuf> {
+    if let Some(explicit) = explicit {
+        ensure_file(explicit, "bwrap binary")?;
+        return Ok(explicit.to_path_buf());
+    }
+    if bundled.is_file() {
+        return Ok(bundled.to_path_buf());
+    }
+    let system_path = PathBuf::from(SYSTEM_BWRAP_PATH);
+    if system_path.is_file() {
+        return Ok(system_path);
+    }
+    if let Some(found) = find_executable_in_path("bwrap") {
+        return Ok(found);
+    }
+
+    bail!(
+        "bwrap binary not found (tried bundle `{}`, system `{}`, PATH lookup)",
+        bundled.display(),
+        SYSTEM_BWRAP_PATH
+    );
+}
+
+fn find_executable_in_path(binary_name: &str) -> Option<PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_var) {
+        #[cfg(windows)]
+        let candidates = [format!("{binary_name}.exe"), binary_name.to_string()];
+        #[cfg(not(windows))]
+        let candidates = [binary_name.to_string()];
+
+        for candidate in candidates {
+            let candidate = dir.join(candidate);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+fn resolve_dir_path(path: Option<PathBuf>, default: fn() -> PathBuf) -> Result<PathBuf> {
+    let raw = path.unwrap_or_else(default);
+    let absolute = if raw.is_absolute() {
+        raw
+    } else {
+        std::env::current_dir()?.join(raw)
+    };
+
+    match absolute.canonicalize() {
+        Ok(path) => Ok(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(absolute),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn default_policy_dir() -> PathBuf {
+    default_config_root().join("policies")
+}
+
+fn default_command_rules_dir() -> PathBuf {
+    default_config_root().join("command-rules")
+}
+
+#[cfg(windows)]
+fn default_config_root() -> PathBuf {
+    let base = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .map(PathBuf::from)
+                .map(|home| home.join("AppData").join("Roaming"))
+        })
+        .unwrap_or_else(|| PathBuf::from("."));
+    base.join("AgentFort")
+}
+
+#[cfg(not(windows))]
+fn default_config_root() -> PathBuf {
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        return PathBuf::from(xdg).join("agent-fort");
+    }
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    home.join(".config").join("agent-fort")
 }
 
 trait SetIoTimeout {

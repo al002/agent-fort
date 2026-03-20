@@ -80,7 +80,11 @@ pub fn default_install_root_path() -> PathBuf {
     default_install_root()
 }
 
-/// Returns default policy directory path (`<current_dir>/policies`).
+/// Returns default policy directory path.
+///
+/// On Linux: `$XDG_CONFIG_HOME/agent-fort/policies` or `~/.config/agent-fort/policies`.
+///
+/// On Windows: `%APPDATA%\\AgentFort\\policies`.
 ///
 /// # Example
 /// ```
@@ -91,6 +95,16 @@ pub fn default_install_root_path() -> PathBuf {
 /// ```
 pub fn default_policy_dir_path() -> PathBuf {
     default_policy_dir()
+}
+
+/// Returns default command rules directory path.
+///
+/// On Linux: `$XDG_CONFIG_HOME/agent-fort/command-rules` or
+/// `~/.config/agent-fort/command-rules`.
+///
+/// On Windows: `%APPDATA%\\AgentFort\\command-rules`.
+pub fn default_command_rules_dir_path() -> PathBuf {
+    default_command_rules_dir()
 }
 
 /// Returns default local manifest path (`<install_root>/manifest.json`).
@@ -160,9 +174,11 @@ pub fn install_root_has_manifest(install_root: &Path) -> bool {
 }
 
 pub(super) fn default_policy_dir() -> PathBuf {
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("policies")
+    default_config_root().join("policies")
+}
+
+pub(super) fn default_command_rules_dir() -> PathBuf {
+    default_config_root().join("command-rules")
 }
 
 pub(super) fn resolve_policy_dir(path: PathBuf) -> Result<PathBuf> {
@@ -177,6 +193,30 @@ pub(super) fn resolve_policy_dir(path: PathBuf) -> Result<PathBuf> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(absolute),
         Err(error) => Err(error.into()),
     }
+}
+
+#[cfg(windows)]
+fn default_config_root() -> PathBuf {
+    let base = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .map(PathBuf::from)
+                .map(|home| home.join("AppData").join("Roaming"))
+        })
+        .unwrap_or_else(|| PathBuf::from("."));
+    base.join("AgentFort")
+}
+
+#[cfg(not(windows))]
+fn default_config_root() -> PathBuf {
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        return PathBuf::from(xdg).join("agent-fort");
+    }
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    home.join(".config").join("agent-fort")
 }
 
 #[cfg(windows)]
@@ -197,4 +237,22 @@ pub(super) fn default_bootstrap_file_name() -> String {
 #[cfg(not(windows))]
 pub(super) fn default_bootstrap_file_name() -> String {
     "af-bootstrap".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_policy_dir_is_under_default_config_root() {
+        assert_eq!(default_policy_dir(), default_config_root().join("policies"));
+    }
+
+    #[test]
+    fn default_command_rules_dir_is_under_default_config_root() {
+        assert_eq!(
+            default_command_rules_dir(),
+            default_config_root().join("command-rules")
+        );
+    }
 }

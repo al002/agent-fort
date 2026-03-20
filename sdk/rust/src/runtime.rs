@@ -169,10 +169,6 @@ impl RuntimeClient {
     /// - `net`
     /// - `tool`
     ///
-    /// Runtime/backend override fields are rejected by daemon validation.
-    /// Avoid `sandbox`, `runtime_backend`, `backend`, `mounts`, and similar keys
-    /// in operation payload/options/labels.
-    ///
     /// # Errors
     /// Returns transport, RPC, or protocol decode errors.
     pub async fn create_task(

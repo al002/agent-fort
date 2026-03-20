@@ -37,10 +37,6 @@ impl<'a> TaskClient<'a> {
     /// - `net`
     /// - `tool`
     ///
-    /// Runtime/backend override fields are rejected by daemon validation.
-    /// Do not put `sandbox`, `runtime_backend`, `backend`, `mounts`, or similar
-    /// override keys in operation payload/options/labels.
-    ///
     /// # Errors
     /// Returns transport, RPC, or protocol decode errors.
     ///

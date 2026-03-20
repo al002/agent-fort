@@ -91,6 +91,17 @@ fn build_start_args(config: &ResolvedBootstrapConfig) -> Vec<OsString> {
     args.push(OsString::from("--policy-dir"));
     args.push(config.policy_dir.as_os_str().to_owned());
 
+    args.push(OsString::from("--command-rules-dir"));
+    args.push(config.command_rules_dir.as_os_str().to_owned());
+    if let Some(command_rules_strict) = config.command_rules_strict {
+        args.push(OsString::from("--command-rules-strict"));
+        args.push(OsString::from(if command_rules_strict {
+            "true"
+        } else {
+            "false"
+        }));
+    }
+
     if let Some(store_path) = &config.store_path {
         args.push(OsString::from("--store-path"));
         args.push(store_path.as_os_str().to_owned());

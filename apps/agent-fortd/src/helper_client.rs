@@ -8,9 +8,6 @@ use af_sandbox::{
 };
 use anyhow::{Context, Result, bail};
 
-const ENV_BWRAP_PATH: &str = "AF_BWRAP_PATH";
-const ENV_CGROUP_ROOT: &str = "AF_CGROUP_ROOT";
-
 #[derive(Debug, Clone)]
 pub struct HelperClient {
     helper_path: PathBuf,
@@ -33,8 +30,10 @@ impl HelperClient {
         let encoded = serde_json::to_vec(&request).context("serialize helper request")?;
 
         let mut child = Command::new(&self.helper_path)
-            .env(ENV_BWRAP_PATH, &self.bwrap_path)
-            .env(ENV_CGROUP_ROOT, &self.cgroup_root)
+            .arg("--bwrap-path")
+            .arg(&self.bwrap_path)
+            .arg("--cgroup-root")
+            .arg(&self.cgroup_root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -113,6 +112,7 @@ mod tests {
             ],
             cwd: PathBuf::from("/tmp"),
             env: BTreeMap::new(),
+            stdin: None,
             filesystem: FilesystemPolicy {
                 mode: FilesystemMode::FullAccess,
                 include_platform_defaults: false,

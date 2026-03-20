@@ -50,12 +50,13 @@ cargo build -p af-bootstrap
   - network `disabled`
   - command exec timeout is `60s`
   - stdout/stderr capture caps are `1 MiB` each.
-  - cgroup governance defaults to `best_effort` (set `AF_RESOURCE_GOVERNANCE_MODE=required` for strict enforcement).
+  - cgroup governance defaults to `best_effort`.
 
 ## Usage
 
 ```rust
-use af_sdk::{AgentFortClient, BootstrapConfig, SdkConfig, exec_operation};
+use af_sdk::{AgentFortClient, BootstrapConfig, SdkConfig, parse_action_json};
+use serde_json::json;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -64,6 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(BootstrapConfig {
             bootstrap_binary_url: Some("./target/debug/af-bootstrap".into()),
             bundle_manifest: Some("./assets/agent-fortd/linux-x86_64/manifest.json".into()),
+            command_rules_dir: Some("./examples/agent-tui/command-rules".into()),
             ..Default::default(),
         }),
     );
@@ -78,14 +80,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let lease = session.lease.expect("session lease is required");
 
+    let action_json = json!({
+        "schema": "af.action.v1",
+        "request_id": "demo-req-1",
+        "session": {
+            "mode": "create"
+        },
+        "task": {
+            "goal": "demo task",
+            "operation": {
+                "kind": "exec",
+                "payload": {
+                    "command": "echo hello"
+                },
+                "options": {
+                    "cwd": ".",
+                    "env": {},
+                    "stdin": "",
+                    "shell": "/bin/sh"
+                }
+            }
+        }
+    })
+    .to_string();
+    let action = parse_action_json(&action_json)?;
+
     let result = {
         let mut tasks = client.tasks().await?;
         tasks
             .create(
                 session.session_id.clone(),
                 lease.rebind_token.clone(),
-                exec_operation("echo hello"),
-                Some("demo task".to_string()),
+                action.operation,
+                action.goal,
             )
             .await?
     };
@@ -114,6 +141,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 ## Policy Example
+
+`policy` defines the system safety limits.
+
+- default policy directory:
+  - Linux: `~/.config/agent-fort/policies`
+  - Windows: `%APPDATA%\\AgentFort\\policies`
+- policy is required: runtime startup fails when `static_policy.yaml` / `static_policy.yml` is missing.
 
 Create `policies/static_policy.yaml`:
 
@@ -160,6 +194,39 @@ backends:
 ```
 
 Valid task operation kinds are: `exec`, `fs.read`, `fs.write`, `net`, `tool`.
+
+## Command Rules
+
+Policy runtime supports command-rule files in Starlark syntax and hot reload.
+
+`command rule` maps command patterns into capability, augmenting built-in `capability/extractor`.
+
+- default rules directory:
+  - Linux: `~/.config/agent-fort/command-rules`
+  - Windows: `%APPDATA%\\AgentFort\\command-rules`
+
+Example `command-rules/00-base.rules`:
+
+```python
+command_rule(
+    pattern = ["curl"],
+    capabilities = cap(
+        net_connect = [net(host = url_host_from_arg(0), port = 443, protocol = "https")],
+    ),
+    reason = "curl connects to url host",
+    match = ["curl https://example.com"],
+)
+
+command_rule(
+    pattern = ["curl"],
+    when = has_any(["-o", "--output"]),
+    capabilities = cap(
+        fs_write = [resolve_path(arg_after_any(["-o", "--output"]))],
+    ),
+    reason = "curl output writes destination file",
+    match = ["curl https://example.com -o result.json"],
+)
+```
 
 ## Testing
 

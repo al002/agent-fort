@@ -1,4 +1,3 @@
-use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io;
 use std::path::PathBuf;
@@ -8,14 +7,16 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use af_rpc_proto::ApprovalDecision as RpcApprovalDecision;
 use af_rpc_proto::ApprovalStatus as RpcApprovalStatus;
 use af_rpc_proto::task_outcome::Outcome as RpcTaskOutcome;
-use af_sdk::{AgentFortClient, BootstrapConfig, SdkConfig, SdkError, TaskOperation};
+use af_sdk::{
+    AgentFortClient, BootstrapConfig, SdkConfig, SdkError, build_exec_action_json,
+    parse_action_json,
+};
 use crossterm::{
     cursor,
     event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use prost_types::{Struct as ProstStruct, Value as ProstValue, value::Kind as ProstValueKind};
 use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
@@ -199,6 +200,7 @@ struct ExampleSdkParams {
     bundle_manifest: String,
     endpoint: Option<String>,
     policy_dir: PathBuf,
+    command_rules_dir: PathBuf,
     store_path: PathBuf,
 }
 
@@ -227,6 +229,7 @@ impl ExampleSdkParams {
                 root.join("runtime").join("agent-fortd.sock").display()
             )),
             policy_dir: root.join("policies"),
+            command_rules_dir: root.join("command-rules"),
             store_path: root.join("runtime").join("agent-fortd.sqlite3"),
         }
     }
@@ -240,6 +243,8 @@ impl ExampleSdkParams {
                 bundle_manifest: Some(self.bundle_manifest.clone()),
                 endpoint: self.endpoint.clone(),
                 policy_dir: Some(self.policy_dir.clone()),
+                command_rules_dir: Some(self.command_rules_dir.clone()),
+                command_rules_strict: Some(true),
                 store_path: Some(self.store_path.clone()),
             }),
         )
@@ -311,6 +316,8 @@ impl CommandExecutor {
         client: &mut AgentFortClient,
         command: String,
     ) -> af_sdk::Result<(String, Option<PendingApprovalContext>)> {
+        let action = parse_action_json(&build_exec_action_json(&command))?;
+
         let session = {
             let mut sessions = client.sessions().await?;
             sessions.create_session().await?
@@ -328,8 +335,8 @@ impl CommandExecutor {
                 .create(
                     session_id.clone(),
                     rebind_token.clone(),
-                    build_exec_operation(&command),
-                    Some(format!("exec: {command}")),
+                    action.operation,
+                    action.goal.or_else(|| Some(format!("exec: {command}"))),
                 )
                 .await?
         };
@@ -548,25 +555,6 @@ fn now_ms() -> u128 {
         .unwrap_or(0)
 }
 
-fn build_exec_operation(command: &str) -> TaskOperation {
-    let mut payload_fields = BTreeMap::new();
-    payload_fields.insert(
-        "command".to_string(),
-        ProstValue {
-            kind: Some(ProstValueKind::StringValue(command.to_string())),
-        },
-    );
-
-    TaskOperation {
-        kind: "exec".to_string(),
-        payload: Some(ProstStruct {
-            fields: payload_fields,
-        }),
-        options: None,
-        labels: HashMap::new(),
-    }
-}
-
 fn agent_tui_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
@@ -638,9 +626,10 @@ fn initialize_executor(
         Ok::<(AgentFortClient, String), SdkError>((
             client,
             format!(
-                "ready endpoint={endpoint}, daemon_instance_id={}, policy_dir={}, store_path={}",
+                "ready endpoint={endpoint}, daemon_instance_id={}, policy_dir={}, command_rules_dir={}, store_path={}",
                 ping.daemon_instance_id,
                 sdk_params.policy_dir.display(),
+                sdk_params.command_rules_dir.display(),
                 sdk_params.store_path.display()
             ),
         ))
@@ -658,8 +647,9 @@ fn initialize_executor(
         )),
         Err(error) => Ok((
             format!(
-                "SDK initialize failed: {error}; policy_dir={}, store_path={}",
+                "SDK initialize failed: {error}; policy_dir={}, command_rules_dir={}, store_path={}",
                 sdk_params.policy_dir.display(),
+                sdk_params.command_rules_dir.display(),
                 sdk_params.store_path.display()
             ),
             None,

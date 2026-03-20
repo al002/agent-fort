@@ -3,16 +3,22 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use url::Url;
 
-use super::{DEFAULT_LOCAL_DEV_BOOTSTRAP_DIR, EXPECTED_BOOTSTRAP_SHA256_LINUX_X86_64};
+use super::{DEFAULT_LOCAL_DEV_BOOTSTRAP_DIR, EXPECTED_BOOTSTRAP_SHA256_BY_TARGET_TOML};
 use crate::error::{Result, SdkError};
 
 #[derive(Debug, Clone)]
 enum Source {
     Local(PathBuf),
     Http(Url),
+}
+
+#[derive(Debug, Deserialize)]
+struct BootstrapSha256Manifest {
+    bootstrap_sha256: std::collections::BTreeMap<String, String>,
 }
 
 pub(super) fn init_bootstrap_binary(url_text: &str, install_root: &Path) -> Result<PathBuf> {
@@ -28,7 +34,7 @@ pub(super) fn init_bootstrap_binary(url_text: &str, install_root: &Path) -> Resu
         if actual_sha256 != expected_sha256 {
             return Err(SdkError::BootstrapChecksumMismatch {
                 path: target_path.clone(),
-                expected: expected_sha256.to_string(),
+                expected: expected_sha256,
                 actual: actual_sha256,
             });
         }
@@ -81,14 +87,32 @@ fn sha256_bytes(bytes: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn expected_bootstrap_sha256() -> Result<&'static str> {
-    match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("linux", "x86_64") => Ok(EXPECTED_BOOTSTRAP_SHA256_LINUX_X86_64),
-        (os, arch) => Err(SdkError::Unsupported(match (os, arch) {
-            ("windows", "x86_64") => "missing hardcoded bootstrap sha256 for windows-x86_64 target",
-            _ => "missing hardcoded bootstrap sha256 for current target",
-        })),
+fn expected_bootstrap_sha256() -> Result<String> {
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+    let target = format!("{os}-{arch}");
+    let manifest: BootstrapSha256Manifest =
+        toml::from_str(EXPECTED_BOOTSTRAP_SHA256_BY_TARGET_TOML)
+            .map_err(|_| SdkError::Unsupported("invalid embedded bootstrap sha256 manifest"))?;
+
+    let Some(expected) = manifest.bootstrap_sha256.get(&target) else {
+        return Err(SdkError::Unsupported(match (os, arch) {
+            ("windows", "x86_64") => "missing embedded bootstrap sha256 for windows-x86_64 target",
+            _ => "missing embedded bootstrap sha256 for current target",
+        }));
+    };
+
+    let expected = expected.trim();
+    if !is_sha256_hex(expected) {
+        return Err(SdkError::Unsupported(
+            "invalid embedded bootstrap sha256 value for current target",
+        ));
     }
+    Ok(expected.to_string())
+}
+
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn default_local_bin_path() -> PathBuf {

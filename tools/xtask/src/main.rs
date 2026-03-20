@@ -1,8 +1,9 @@
 use anyhow::{Context, Result, bail};
 use flate2::Compression;
 use flate2::write::GzEncoder;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io::Read;
@@ -429,6 +430,11 @@ struct BootstrapSyncBundle {
     helper_rel_path: String,
 }
 
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct SdkBootstrapSha256Manifest {
+    bootstrap_sha256: BTreeMap<String, String>,
+}
+
 fn build_runtime_bundle(args: &[String]) -> Result<()> {
     if has_flag(args, "--help") || has_flag(args, "-h") {
         print_package_bundle_usage();
@@ -552,10 +558,84 @@ fn build_sdk_af_bootstrap_binary(args: &[String]) -> Result<()> {
         format!("{binary_sha256}  {binary_name}\n"),
     )
     .with_context(|| format!("failed to write {}", binary_sha_path.display()))?;
+    sync_sdk_bootstrap_expected_sha256(&root, &target, profile, &binary_sha256)?;
 
     println!("sdk af-bootstrap binary: {}", output_binary_path.display());
     println!("binary sha256: {binary_sha256}");
     Ok(())
+}
+
+fn sync_sdk_bootstrap_expected_sha256(
+    repo_root: &Path,
+    target: &str,
+    profile: BuildProfile,
+    binary_sha256: &str,
+) -> Result<()> {
+    if !matches!(profile, BuildProfile::Release) {
+        println!(
+            "skip sdk bootstrap checksum sync for profile `{}`",
+            profile.output_dir()
+        );
+        return Ok(());
+    }
+
+    let output_path = repo_root
+        .join("sdk")
+        .join("rust")
+        .join("src")
+        .join("generated")
+        .join("bootstrap-sha256.toml");
+
+    fs::create_dir_all(
+        output_path
+            .parent()
+            .context("bootstrap checksum target path has no parent directory")?,
+    )
+    .with_context(|| {
+        format!(
+            "failed to create parent directory for {}",
+            output_path.display()
+        )
+    })?;
+
+    let next = binary_sha256.trim();
+    let mut manifest = read_sdk_bootstrap_sha256_manifest(&output_path)?;
+    let current = manifest.bootstrap_sha256.get(target).cloned();
+    if current.as_deref() == Some(next) {
+        println!(
+            "sdk expected bootstrap sha256 unchanged: {}",
+            output_path.display()
+        );
+        return Ok(());
+    }
+
+    manifest
+        .bootstrap_sha256
+        .insert(target.to_string(), next.to_string());
+    let rendered = toml::to_string_pretty(&manifest)
+        .context("failed to serialize sdk bootstrap checksum manifest")?;
+    fs::write(&output_path, rendered)
+        .with_context(|| format!("failed to write {}", output_path.display()))?;
+    println!(
+        "updated sdk expected bootstrap sha256: {} ({target})",
+        output_path.display(),
+    );
+    Ok(())
+}
+
+fn read_sdk_bootstrap_sha256_manifest(path: &Path) -> Result<SdkBootstrapSha256Manifest> {
+    if !path.exists() {
+        return Ok(SdkBootstrapSha256Manifest::default());
+    }
+
+    let content =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    toml::from_str(&content).with_context(|| {
+        format!(
+            "failed to parse sdk bootstrap checksum manifest {}",
+            path.display()
+        )
+    })
 }
 
 fn build_af_bootstrap_binary(root: &Path, profile: BuildProfile) -> Result<()> {

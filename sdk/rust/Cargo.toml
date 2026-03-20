@@ -16,3 +16,4 @@ uuid = { workspace = true }
 ureq = { version = "3.2", default-features = false, features = ["rustls"] }
 url = "2.5"
 wait-timeout = "0.2"
+toml = "0.8"

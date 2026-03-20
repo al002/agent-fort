@@ -22,8 +22,8 @@ const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_STARTUP_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_PING_INTERVAL_MS: u64 = 200;
 const DEFAULT_LOCAL_DEV_BOOTSTRAP_DIR: &str = "target/debug";
-const EXPECTED_BOOTSTRAP_SHA256_LINUX_X86_64: &str =
-    "e935437defc54009b8cddbd8b946f9b1f5a20feb71cef5c0fdac32c4f6e3e0c3";
+const EXPECTED_BOOTSTRAP_SHA256_BY_TARGET_TOML: &str =
+    include_str!("generated/bootstrap-sha256.toml");
 
 #[cfg(windows)]
 const DEFAULT_ENDPOINT: &str = "npipe://agent-fortd";

@@ -40,35 +40,68 @@ pub enum SdkError {
 
     /// Download or read of bootstrap binary failed.
     #[error("bootstrap download failed from `{url}`: {message}")]
-    BootstrapDownloadFailed { url: String, message: String },
+    BootstrapDownloadFailed {
+        /// Source URL or local path used for bootstrap fetch.
+        url: String,
+        /// Underlying fetch/read failure message.
+        message: String,
+    },
 
     /// Downloaded bootstrap checksum does not match expected value.
     #[error("bootstrap checksum mismatch for {path:?}: expected {expected}, got {actual}")]
     BootstrapChecksumMismatch {
+        /// Output path where downloaded bootstrap binary was written.
         path: PathBuf,
+        /// Expected SHA-256 checksum for current target.
         expected: String,
+        /// Actual SHA-256 checksum computed from downloaded bytes.
         actual: String,
     },
 
     /// Bootstrap executable appears blocked by host security controls.
     #[error("bootstrap executable was blocked on {path:?}: {message}")]
-    BootstrapExecutionBlocked { path: PathBuf, message: String },
+    BootstrapExecutionBlocked {
+        /// Bootstrap executable path that failed to spawn.
+        path: PathBuf,
+        /// Platform-specific diagnostic message.
+        message: String,
+    },
 
     /// Bootstrap subcommand exceeded timeout.
     #[error("bootstrap command `{command}` timed out after {timeout_ms} ms")]
-    BootstrapCommandTimeout { command: String, timeout_ms: u64 },
+    BootstrapCommandTimeout {
+        /// Bootstrap subcommand name (`sync` or `start`).
+        command: String,
+        /// Configured timeout in milliseconds.
+        timeout_ms: u64,
+    },
 
     /// Bootstrap process exited unsuccessfully.
     #[error("bootstrap command `{command}` failed: {message}")]
-    BootstrapCommandFailed { command: String, message: String },
+    BootstrapCommandFailed {
+        /// Bootstrap subcommand name (`sync` or `start`).
+        command: String,
+        /// Captured process error detail.
+        message: String,
+    },
 
     /// Bootstrap output was malformed or incompatible with expected schema.
     #[error("bootstrap returned invalid output for `{command}`: {message}")]
-    BootstrapInvalidOutput { command: String, message: String },
+    BootstrapInvalidOutput {
+        /// Bootstrap subcommand name (`sync` or `start`).
+        command: String,
+        /// Parsing/validation failure detail.
+        message: String,
+    },
 
     /// Bootstrap explicitly returned `ok=false` payload.
     #[error("bootstrap reported error for `{command}`: {error}")]
-    BootstrapReportedError { command: String, error: String },
+    BootstrapReportedError {
+        /// Bootstrap subcommand name (`sync` or `start`).
+        command: String,
+        /// Error message reported by bootstrap JSON payload.
+        error: String,
+    },
 
     /// Joining asynchronous bootstrap worker task failed.
     #[error("bootstrap task join failed: {0}")]
@@ -80,7 +113,12 @@ pub enum SdkError {
 
     /// Daemon returned RPC-layer error response.
     #[error("daemon rpc error ({code}): {message}")]
-    DaemonRpc { code: String, message: String },
+    DaemonRpc {
+        /// Daemon RPC error code name.
+        code: String,
+        /// Daemon RPC error message.
+        message: String,
+    },
 
     /// Protocol-level decoding or semantic contract error.
     #[error("protocol error: {0}")]

@@ -1,9 +1,8 @@
 use std::sync::Arc;
-use std::sync::Mutex;
 
-use af_policy_infra::{PolicyRuntime, PolicyRuntimeConfig};
+use af_policy_infra::{PolicyRuntimeConfig, SharedPolicyRuntime};
 use af_store::Store;
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use tracing::info;
 
 use crate::config::DaemonConfig;
@@ -29,16 +28,13 @@ impl BootstrappedDaemon {
             "sqlite store ready"
         );
 
-        let policy_runtime = Arc::new(Mutex::new(PolicyRuntime::start(
+        let policy_runtime = SharedPolicyRuntime::start(
             PolicyRuntimeConfig::new(config.policy_dir.clone()).with_command_rules(
                 config.command_rules_dir.clone(),
                 config.command_rules_strict,
             ),
-        )?));
-        let policy_status = policy_runtime
-            .lock()
-            .map_err(|_| anyhow!("policy runtime lock poisoned"))?
-            .status()?;
+        )?;
+        let policy_status = policy_runtime.status()?;
         info!(
             policy_dir = %config.policy_dir.display(),
             command_rules_dir = %config.command_rules_dir.display(),

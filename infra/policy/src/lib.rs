@@ -1,6 +1,7 @@
 mod command_rule_loader;
 mod command_rule_parser;
 mod runtime;
+mod shared_runtime;
 mod source;
 mod static_policy_parser;
 mod watcher;
@@ -8,6 +9,7 @@ mod watcher;
 pub use command_rule_loader::{CommandRuleLoader, LoadedCommandRules};
 pub use command_rule_parser::CommandRuleParser;
 pub use runtime::{ActivePolicy, PolicyRuntime};
+pub use shared_runtime::SharedPolicyRuntime;
 pub use source::{
     CommandRulesConfig, DEFAULT_POLL_INTERVAL, PolicyReloadError, PolicyRuntimeConfig, PolicyStatus,
 };

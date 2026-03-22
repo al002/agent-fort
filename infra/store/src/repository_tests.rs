@@ -127,8 +127,9 @@ fn approval_repository_idempotency_and_expire_flow() {
     create_base_session(&store, "session-1");
     create_base_task(&store, "session-1", "task-1", "trace-1");
 
-    let created = store
-        .create_approval(NewApproval {
+    let created = ApprovalRepository::create_approval(
+        &store,
+        NewApproval {
             approval_id: "approval-1".to_string(),
             session_id: "session-1".to_string(),
             task_id: "task-1".to_string(),
@@ -146,8 +147,9 @@ fn approval_repository_idempotency_and_expire_flow() {
             execution_contract_json: "{\"decision\":\"ask\"}".to_string(),
             created_at_ms: 1_000,
             expires_at_ms: 5_000,
-        })
-        .expect("create approval");
+        },
+    )
+    .expect("create approval");
     assert_eq!(created.status, ApprovalStatus::Pending);
 
     let approved = store
@@ -189,8 +191,9 @@ fn approval_repository_idempotency_and_expire_flow() {
         other => panic!("expected idempotency conflict, got {other:?}"),
     }
 
-    store
-        .create_approval(NewApproval {
+    ApprovalRepository::create_approval(
+        &store,
+        NewApproval {
             approval_id: "approval-2".to_string(),
             session_id: "session-1".to_string(),
             task_id: "task-1".to_string(),
@@ -208,8 +211,9 @@ fn approval_repository_idempotency_and_expire_flow() {
             execution_contract_json: "{\"decision\":\"ask\"}".to_string(),
             created_at_ms: 1_000,
             expires_at_ms: 1_200,
-        })
-        .expect("create expiring approval");
+        },
+    )
+    .expect("create expiring approval");
 
     let expired = store
         .expire_pending_approvals(2_000, 10)
@@ -399,8 +403,9 @@ fn respond_approval_skips_task_approval_audit_when_task_status_does_not_change()
         })
         .expect("cancel task before approval response");
 
-    store
-        .create_approval(NewApproval {
+    ApprovalRepository::create_approval(
+        &store,
+        NewApproval {
             approval_id: "approval-1".to_string(),
             session_id: "session-1".to_string(),
             task_id: "task-1".to_string(),
@@ -418,8 +423,9 @@ fn respond_approval_skips_task_approval_audit_when_task_status_does_not_change()
             execution_contract_json: "{\"decision\":\"ask\"}".to_string(),
             created_at_ms: 1_000,
             expires_at_ms: 5_000,
-        })
-        .expect("create approval");
+        },
+    )
+    .expect("create approval");
 
     let result = <Store as ApprovalPort>::respond_approval_with_effect(
         &store,

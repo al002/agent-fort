@@ -1,24 +1,22 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use af_approval::{
-    ApprovalItem as DomainApprovalItem, ApprovalRepository, ApprovalStatus, NewApproval,
-};
-use af_audit::{AuditEventType, AuditRepository, NewAuditEvent};
+use af_approval::ApprovalItem as DomainApprovalItem;
+use af_audit::{AuditEventType, NewAuditEvent};
 use af_core::{
     ApprovalAppError, ApprovalAppService, BackendSelector, CancelTaskInput, CapabilityDecision,
-    CapabilityDelta, CapabilityExtractor, CapabilityPolicyEvaluator, CommandRuleEngine,
-    CreateSessionInput, CreateTaskInput, EvaluationMode, GetApprovalInput, NormalizedCommand,
-    OperationNormalizer, RawOperation, RequestedCapabilities, RespondApprovalInput,
-    RuntimeCompiler, RuntimeContext, RuntimePlatform, SessionAppError, SessionAppService,
-    SessionConfig, TaskAppError, TaskAppService, apply_delta_to_capability_set,
+    CapabilityDelta, CapabilityExtractor, CapabilityGrantAppService, CapabilityPolicyEvaluator,
+    CommandRuleEngine, CreateApprovalInput, CreateSessionInput, CreateTaskInput, EvaluationMode,
+    GetApprovalInput, NormalizedCommand, OperationNormalizer, RawOperation, RequestedCapabilities,
+    RespondApprovalInput, RuntimeCompiler, RuntimeContext, RuntimePlatform, SessionAppError,
+    SessionAppService, SessionConfig, TaskAppError, TaskAppService, TaskExecutionAppService,
     capability_set_within_policy, intersect_requested_with_capabilities,
     requested_within_capabilities,
 };
 use af_policy::CapabilitySet;
-use af_policy_infra::{ActivePolicy, PolicyRuntime};
+use af_policy_infra::{ActivePolicy, SharedPolicyRuntime};
 use af_rpc_proto::codec::{decode_message, encode_message};
 use af_rpc_proto::task_outcome::Outcome as RpcTaskOutcome;
 use af_rpc_proto::{
@@ -39,10 +37,10 @@ use af_sandbox::{
     SandboxExitStatus, SyscallPolicy, TraceContext, WritableRoot,
 };
 use af_session::{SessionRepository, SessionRepositoryError, SessionStatus as DomainSessionStatus};
-use af_store::{Store, StoreError};
+use af_store::Store;
 use af_task::{
-    AdvanceTaskStepCommand, TaskCreatedBy as DomainTaskCreatedBy, TaskRepository,
-    TaskStatus as DomainTaskStatus, UpdateTaskStatusCommand,
+    AdvanceTaskStepCommand, TaskCreatedBy as DomainTaskCreatedBy, TaskStatus as DomainTaskStatus,
+    UpdateTaskStatusCommand,
 };
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
@@ -80,14 +78,16 @@ struct ControllerState {
     store: Arc<Store>,
     session_service: SessionAppService,
     task_service: TaskAppService,
+    task_execution_service: TaskExecutionAppService,
     approval_service: ApprovalAppService,
+    capability_grant_service: CapabilityGrantAppService,
     execution_runtime: Option<ExecutionRuntime>,
 }
 
 #[derive(Debug, Clone)]
 struct ExecutionRuntime {
     helper_client: HelperClient,
-    policy_runtime: Arc<Mutex<PolicyRuntime>>,
+    policy_runtime: SharedPolicyRuntime,
     policy_dir: PathBuf,
     workspace_root: Option<PathBuf>,
     resource_governance_mode: ResourceGovernanceMode,
@@ -138,7 +138,7 @@ impl RpcController {
         daemon_instance_id: String,
         store: Arc<Store>,
         helper_client: HelperClient,
-        policy_runtime: Arc<Mutex<PolicyRuntime>>,
+        policy_runtime: SharedPolicyRuntime,
         policy_dir: PathBuf,
         workspace_root: Option<PathBuf>,
         resource_governance_mode: ResourceGovernanceMode,
@@ -163,14 +163,18 @@ impl RpcController {
     ) -> Self {
         let session_service = SessionAppService::new(store.clone(), SessionConfig::default());
         let task_service = TaskAppService::new(store.clone());
+        let task_execution_service = TaskExecutionAppService::new(store.clone());
         let approval_service = ApprovalAppService::new(store.clone());
+        let capability_grant_service = CapabilityGrantAppService::new(store.clone());
         Self {
             state: Arc::new(ControllerState {
                 daemon_instance_id,
                 store,
                 session_service,
                 task_service,
+                task_execution_service,
                 approval_service,
+                capability_grant_service,
                 execution_runtime,
             }),
         }

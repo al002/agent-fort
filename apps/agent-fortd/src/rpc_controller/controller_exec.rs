@@ -17,20 +17,27 @@ impl RpcController {
             normalize_task_operation(&operation, runtime, &self.state.daemon_instance_id)?;
         let active_policy = load_active_policy(runtime)?;
         let session_grant = ensure_session_grant(
-            &self.state.store,
+            &self.state.capability_grant_service,
             &task.session_id,
             &active_policy.policy.capabilities,
         )?;
 
         match authorize_interactive(normalized, &active_policy, &session_grant)? {
-            AuthorizationResult::Allow(plan) => {
-                execute_allow_path(&self.state.store, runtime, task, plan.as_ref())
-            }
-            AuthorizationResult::Ask(plan) => {
-                execute_ask_path(&self.state.store, task, &operation, plan.as_ref())
-            }
+            AuthorizationResult::Allow(plan) => execute_allow_path(
+                &self.state.task_execution_service,
+                runtime,
+                task,
+                plan.as_ref(),
+            ),
+            AuthorizationResult::Ask(plan) => execute_ask_path(
+                &self.state.task_execution_service,
+                &self.state.approval_service,
+                task,
+                &operation,
+                plan.as_ref(),
+            ),
             AuthorizationResult::Deny { reason, code } => {
-                execute_deny_path(&self.state.store, task, reason, code)
+                execute_deny_path(&self.state.task_execution_service, task, reason, code)
             }
         }
     }
@@ -60,7 +67,7 @@ impl RpcController {
         }
 
         let session_grant = match apply_approval_delta_with_cas(
-            &self.state.store,
+            &self.state.capability_grant_service,
             &task.session_id,
             &snapshot,
             &active_policy,
@@ -73,7 +80,12 @@ impl RpcController {
                         RpcErrorCode::PolicyDenied | RpcErrorCode::InvalidTaskState
                     )
                 {
-                    return execute_deny_path(&self.state.store, task, message, "POLICY_DENIED");
+                    return execute_deny_path(
+                        &self.state.task_execution_service,
+                        task,
+                        message,
+                        "POLICY_DENIED",
+                    );
                 }
                 return Err(response);
             }
@@ -85,7 +97,7 @@ impl RpcController {
 
         if !requested_within_capabilities(&requested, &session_grant.capabilities) {
             return execute_deny_path(
-                &self.state.store,
+                &self.state.task_execution_service,
                 task,
                 "approved grant no longer satisfies requested capabilities".to_string(),
                 "POLICY_DENIED",
@@ -93,8 +105,15 @@ impl RpcController {
         }
 
         match compile_allow_plan(normalized, requested, &active_policy, &session_grant) {
-            Ok(plan) => execute_allow_path(&self.state.store, runtime, task, &plan),
-            Err(reason) => execute_deny_path(&self.state.store, task, reason, "POLICY_DENIED"),
+            Ok(plan) => {
+                execute_allow_path(&self.state.task_execution_service, runtime, task, &plan)
+            }
+            Err(reason) => execute_deny_path(
+                &self.state.task_execution_service,
+                task,
+                reason,
+                "POLICY_DENIED",
+            ),
         }
     }
 

@@ -1,13 +1,13 @@
 use super::*;
 
 pub(super) fn execute_allow_path(
-    store: &Store,
+    task_execution_service: &TaskExecutionAppService,
     runtime: &ExecutionRuntime,
     task: af_task::Task,
     plan: &AllowExecutionPlan,
 ) -> Result<(af_task::Task, TaskOutcome), RpcResponse> {
     let running = transition_task_status(
-        store,
+        task_execution_service,
         &task,
         Some(DomainTaskStatus::Pending),
         DomainTaskStatus::Running,
@@ -16,7 +16,7 @@ pub(super) fn execute_allow_path(
     )?;
 
     append_task_audit(
-        store,
+        task_execution_service,
         AuditEventType::TaskStarted,
         &running,
         Some(policy_execution_payload_json(plan)),
@@ -81,7 +81,7 @@ pub(super) fn execute_allow_path(
     };
 
     let finished = transition_task_status(
-        store,
+        task_execution_service,
         &running,
         Some(DomainTaskStatus::Running),
         finished_status,
@@ -89,7 +89,7 @@ pub(super) fn execute_allow_path(
         error_message,
     )?;
 
-    let stepped = finalize_task_step(store, &finished)?;
+    let stepped = finalize_task_step(task_execution_service, &finished)?;
     let event_type = if finished_status == DomainTaskStatus::Completed {
         AuditEventType::TaskCompleted
     } else {
@@ -97,7 +97,7 @@ pub(super) fn execute_allow_path(
     };
 
     append_task_audit(
-        store,
+        task_execution_service,
         event_type,
         &stepped,
         Some(execution_payload_json(&execution, plan)),
@@ -113,13 +113,14 @@ pub(super) fn execute_allow_path(
 }
 
 pub(super) fn execute_ask_path(
-    store: &Store,
+    task_execution_service: &TaskExecutionAppService,
+    approval_service: &ApprovalAppService,
     task: af_task::Task,
     operation: &TaskOperation,
     plan: &AskExecutionPlan,
 ) -> Result<(af_task::Task, TaskOutcome), RpcResponse> {
     let blocked = transition_task_status(
-        store,
+        task_execution_service,
         &task,
         Some(DomainTaskStatus::Pending),
         DomainTaskStatus::Blocked,
@@ -151,13 +152,12 @@ pub(super) fn execute_ask_path(
         &plan.reason,
     );
 
-    let created_approval = store
-        .create_approval(NewApproval {
+    let created_approval = approval_service
+        .create_approval(CreateApprovalInput {
             approval_id: approval_id.clone(),
             session_id: blocked.session_id.clone(),
             task_id: blocked.task_id.clone(),
             trace_id: blocked.trace_id.clone(),
-            status: ApprovalStatus::Pending,
             summary: summary.clone(),
             details,
             items,
@@ -167,10 +167,10 @@ pub(super) fn execute_ask_path(
             created_at_ms: now,
             expires_at_ms,
         })
-        .map_err(map_approval_repo_error)?;
+        .map_err(map_approval_error)?;
 
     append_task_audit(
-        store,
+        task_execution_service,
         AuditEventType::ApprovalCreated,
         &blocked,
         Some(
@@ -185,7 +185,7 @@ pub(super) fn execute_ask_path(
     )?;
 
     append_task_audit(
-        store,
+        task_execution_service,
         AuditEventType::TaskAwaitingApproval,
         &blocked,
         Some(
@@ -216,13 +216,13 @@ pub(super) fn execute_ask_path(
 }
 
 pub(super) fn execute_deny_path(
-    store: &Store,
+    task_execution_service: &TaskExecutionAppService,
     task: af_task::Task,
     reason: String,
     policy_code: &'static str,
 ) -> Result<(af_task::Task, TaskOutcome), RpcResponse> {
     let failed = transition_task_status(
-        store,
+        task_execution_service,
         &task,
         Some(DomainTaskStatus::Pending),
         DomainTaskStatus::Failed,
@@ -230,17 +230,17 @@ pub(super) fn execute_deny_path(
         Some(reason.clone()),
     )?;
 
-    let stepped = finalize_task_step(store, &failed)?;
+    let stepped = finalize_task_step(task_execution_service, &failed)?;
 
     append_task_audit(
-        store,
+        task_execution_service,
         AuditEventType::PolicyDenied,
         &stepped,
         Some(json!({ "reason": reason }).to_string()),
         Some(policy_code.to_string()),
     )?;
     append_task_audit(
-        store,
+        task_execution_service,
         AuditEventType::TaskFailed,
         &stepped,
         Some(json!({ "reason": reason }).to_string()),
@@ -259,90 +259,40 @@ pub(super) fn execute_deny_path(
 }
 
 pub(super) fn ensure_session_grant(
-    store: &Store,
+    capability_grant_service: &CapabilityGrantAppService,
     session_id: &str,
     static_capabilities: &CapabilitySet,
 ) -> Result<SessionGrantState, RpcResponse> {
-    if let Some(record) = store
-        .get_capability_grant(session_id)
-        .map_err(|error| map_store_error(error, "get capability_grant"))?
-    {
-        return Ok(SessionGrantState {
-            revision: record.revision,
-            capabilities: parse_capability_set_json(&record.capabilities_json)?,
-        });
-    }
-
-    let initial = initial_session_grant(static_capabilities);
-    let initial_json = serde_json::to_string(&initial).map_err(|error| {
-        err(
-            RpcErrorCode::InternalError,
-            format!("serialize initial capability_grant failed: {error}"),
-        )
-    })?;
-
-    let created = store
-        .create_capability_grant_if_absent(session_id, &initial_json, None, now_ms())
-        .map_err(|error| map_store_error(error, "create capability_grant"))?;
+    let state = capability_grant_service
+        .ensure_session_grant(session_id, static_capabilities, now_ms())
+        .map_err(map_capability_grant_error)?;
 
     Ok(SessionGrantState {
-        revision: created.revision,
-        capabilities: parse_capability_set_json(&created.capabilities_json)?,
+        revision: state.revision,
+        capabilities: state.capabilities,
     })
 }
 
 pub(super) fn apply_approval_delta_with_cas(
-    store: &Store,
+    capability_grant_service: &CapabilityGrantAppService,
     session_id: &str,
     snapshot: &ApprovalSnapshot,
     active_policy: &ActivePolicy,
 ) -> Result<SessionGrantState, RpcResponse> {
-    let current = ensure_session_grant(store, session_id, &active_policy.policy.capabilities)?;
-
-    if current.revision != snapshot.session_grant_revision_before {
-        return Err(err(
-            RpcErrorCode::InvalidTaskState,
-            format!(
-                "capability_grant revision mismatch: expected={}, actual={}",
-                snapshot.session_grant_revision_before, current.revision
-            ),
-        ));
-    }
-
-    if snapshot.delta.is_empty() {
-        return Ok(current);
-    }
-
-    let next = apply_delta_to_capability_set(&current.capabilities, &snapshot.delta);
-    if !capability_set_within_policy(&next, &active_policy.policy.capabilities) {
-        return Err(err(
-            RpcErrorCode::PolicyDenied,
-            "approved delta exceeds policy",
-        ));
-    }
-
-    let next_json = serde_json::to_string(&next).map_err(|error| {
-        err(
-            RpcErrorCode::InternalError,
-            format!("serialize updated capability_grant failed: {error}"),
-        )
-    })?;
-    let delta_json = capability_delta_to_json(&snapshot.delta).to_string();
-
-    let updated = store
-        .update_capability_grant_with_revision(
+    let state = capability_grant_service
+        .apply_delta_with_revision(
             session_id,
             snapshot.session_grant_revision_before,
-            &next_json,
-            &delta_json,
+            &snapshot.delta,
+            &active_policy.policy.capabilities,
             "user",
             now_ms(),
         )
-        .map_err(|error| map_store_error(error, "update capability_grant"))?;
+        .map_err(map_capability_grant_error)?;
 
     Ok(SessionGrantState {
-        revision: updated.revision,
-        capabilities: parse_capability_set_json(&updated.capabilities_json)?,
+        revision: state.revision,
+        capabilities: state.capabilities,
     })
 }
 
@@ -382,14 +332,7 @@ pub(super) fn normalize_task_operation(
 }
 
 pub(super) fn load_active_policy(runtime: &ExecutionRuntime) -> Result<ActivePolicy, RpcResponse> {
-    let policy_runtime = runtime.policy_runtime.lock().map_err(|_| {
-        err(
-            RpcErrorCode::PolicyLoadFailed,
-            "policy runtime lock poisoned",
-        )
-    })?;
-
-    policy_runtime.active_policy().map_err(|error| {
+    runtime.policy_runtime.active_policy().map_err(|error| {
         err(
             RpcErrorCode::PolicyLoadFailed,
             format!("load static policy failed: {error}"),
@@ -422,28 +365,6 @@ pub(super) fn now_ms() -> u64 {
     } else {
         millis as u64
     }
-}
-
-fn initial_session_grant(static_capabilities: &CapabilitySet) -> CapabilitySet {
-    CapabilitySet {
-        fs_read: static_capabilities.fs_read.clone(),
-        fs_write: static_capabilities.fs_write.clone(),
-        fs_delete: static_capabilities.fs_delete.clone(),
-        net_connect: Vec::new(),
-        allow_host_exec: false,
-        allow_process_control: false,
-        allow_privilege: false,
-        allow_credential_access: false,
-    }
-}
-
-fn parse_capability_set_json(raw: &str) -> Result<CapabilitySet, RpcResponse> {
-    serde_json::from_str(raw).map_err(|error| {
-        err(
-            RpcErrorCode::InternalError,
-            format!("parse capability_grant JSON failed: {error}"),
-        )
-    })
 }
 
 fn build_sandbox_request(
@@ -732,7 +653,7 @@ fn execution_payload_json(result: &ExecutionResult, plan: &AllowExecutionPlan) -
 }
 
 fn transition_task_status(
-    store: &Store,
+    task_execution_service: &TaskExecutionAppService,
     task: &af_task::Task,
     expected_status: Option<DomainTaskStatus>,
     next_status: DomainTaskStatus,
@@ -744,7 +665,7 @@ fn transition_task_status(
         DomainTaskStatus::Completed | DomainTaskStatus::Failed | DomainTaskStatus::Cancelled
     );
 
-    store
+    task_execution_service
         .update_task_status(UpdateTaskStatusCommand {
             session_id: task.session_id.clone(),
             task_id: task.task_id.clone(),
@@ -755,15 +676,18 @@ fn transition_task_status(
             error_code,
             error_message,
         })
-        .map_err(map_task_repo_error)
+        .map_err(map_task_error)
 }
 
-fn finalize_task_step(store: &Store, task: &af_task::Task) -> Result<af_task::Task, RpcResponse> {
+fn finalize_task_step(
+    task_execution_service: &TaskExecutionAppService,
+    task: &af_task::Task,
+) -> Result<af_task::Task, RpcResponse> {
     if task.current_step >= 1 {
         return Ok(task.clone());
     }
 
-    store
+    task_execution_service
         .advance_task_step(AdvanceTaskStepCommand {
             session_id: task.session_id.clone(),
             task_id: task.task_id.clone(),
@@ -771,18 +695,18 @@ fn finalize_task_step(store: &Store, task: &af_task::Task) -> Result<af_task::Ta
             next_step: 1,
             updated_at_ms: now_ms(),
         })
-        .map_err(map_task_repo_error)
+        .map_err(map_task_error)
 }
 
 fn append_task_audit(
-    store: &Store,
+    task_execution_service: &TaskExecutionAppService,
     event_type: AuditEventType,
     task: &af_task::Task,
     payload_json: Option<String>,
     error_code: Option<String>,
 ) -> Result<(), RpcResponse> {
-    store
-        .append_event(NewAuditEvent {
+    task_execution_service
+        .append_task_audit(NewAuditEvent {
             ts_ms: now_ms(),
             trace_id: task.trace_id.clone(),
             session_id: Some(task.session_id.clone()),
@@ -791,7 +715,7 @@ fn append_task_audit(
             payload_json,
             error_code,
         })
-        .map_err(map_audit_repo_error)?;
+        .map_err(map_task_error)?;
     Ok(())
 }
 

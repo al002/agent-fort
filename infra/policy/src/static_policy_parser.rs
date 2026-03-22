@@ -100,7 +100,6 @@ fn validate_policy(policy: &StaticPolicy, path: &str) -> PolicyInfraResult<()> {
         let type_matches = matches!(
             (backend, profile),
             (RuntimeBackend::Sandbox, BackendProfile::Sandbox(_))
-                | (RuntimeBackend::Container, BackendProfile::Container(_))
                 | (RuntimeBackend::Microvm, BackendProfile::Microvm(_))
         );
         if !type_matches {

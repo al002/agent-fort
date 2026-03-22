@@ -77,7 +77,6 @@ pub struct BackendCapabilityLimits {
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeBackend {
     Sandbox,
-    Container,
     Microvm,
 }
 
@@ -85,7 +84,6 @@ impl RuntimeBackend {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Sandbox => "sandbox",
-            Self::Container => "container",
             Self::Microvm => "microvm",
         }
     }
@@ -104,7 +102,6 @@ pub struct BackendResourceLimits {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BackendProfile {
     Sandbox(SandboxProfile),
-    Container(ContainerProfile),
     Microvm(MicrovmProfile),
 }
 
@@ -112,7 +109,6 @@ impl BackendProfile {
     pub fn profile_id(&self) -> &str {
         match self {
             Self::Sandbox(profile) => &profile.profile_id,
-            Self::Container(profile) => &profile.profile_id,
             Self::Microvm(profile) => &profile.profile_id,
         }
     }
@@ -127,20 +123,6 @@ pub struct SandboxProfile {
     #[serde(default)]
     pub readonly_roots: Vec<String>,
     pub syscall_policy: String,
-    pub limits: BackendResourceLimits,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ContainerProfile {
-    pub profile_id: String,
-    pub rootless: bool,
-    #[serde(default)]
-    pub drop_linux_capabilities: Vec<String>,
-    pub seccomp_profile: String,
-    pub readonly_rootfs: bool,
-    #[serde(default)]
-    pub allowed_volumes: Vec<String>,
-    pub network_mode: String,
     pub limits: BackendResourceLimits,
 }
 

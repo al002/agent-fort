@@ -1,4 +1,3 @@
-mod adapter_container;
 mod adapter_microvm;
 mod adapter_sandbox;
 mod backend_selector;

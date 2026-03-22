@@ -5,8 +5,8 @@ pub mod command_rule;
 
 pub use capability::{
     BackendCapabilityLimits, BackendPolicy, BackendProfile, BackendResourceLimits, CapabilitySet,
-    ContainerProfile, DefaultAction, MicrovmProfile, NetRule, RuntimeBackend, SandboxProfile,
-    SessionGrant, StaticPolicy,
+    DefaultAction, MicrovmProfile, NetRule, RuntimeBackend, SandboxProfile, SessionGrant,
+    StaticPolicy,
 };
 pub use command_rule::{
     CommandRule, CommandRuleSet, NetConnectSpec, PatternToken, RuleCapabilities, RuleCondition,

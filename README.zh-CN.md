@@ -7,7 +7,6 @@ Agent Fort 是给 AI Agent 使用的 security runtime SDK。
 
 运行时后端包括：
 - sandbox
-- container
 - microvm
 
 ## 快速开始
@@ -54,7 +53,7 @@ cargo xtask package bundle
 
 - 请求会先被统一化并提取为 capabilities，再进入策略求值。
 - 策略结果由 capability 决定（`allow` / `deny` / `ask`）。
-- 实际执行由隔离后端承载（sandbox/container/microvm）。
+- 实际执行由隔离后端承载（sandbox/microvm）。
 - Sandbox 默认行为：
   - 文件系统为 `restricted`（启用平台默认挂载并挂载 `/proc`），挂载当前目录为可读写；
   - 网络禁用
@@ -311,6 +310,5 @@ cargo xtask package bundle
 开发中:
 - [ ] Python SDK
 - [ ] Node.js SDK
-- [ ] Container runtime
 - [ ] MicroVM runtime
 - [ ] 跨平台支持（Linux/Windows/macOS）

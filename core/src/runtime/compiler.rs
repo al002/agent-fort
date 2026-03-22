@@ -4,12 +4,11 @@ use thiserror::Error;
 use crate::capability::{NetEndpoint, RequestedCapabilities};
 
 use super::backend_selector::SelectedBackend;
-use super::{adapter_container, adapter_microvm, adapter_sandbox};
+use super::{adapter_microvm, adapter_sandbox};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeExecPlan {
     Sandbox(SandboxRuntimePlan),
-    Container(ContainerRuntimePlan),
     Microvm(MicrovmRuntimePlan),
 }
 
@@ -17,7 +16,6 @@ impl RuntimeExecPlan {
     pub fn backend(&self) -> RuntimeBackend {
         match self {
             Self::Sandbox(_) => RuntimeBackend::Sandbox,
-            Self::Container(_) => RuntimeBackend::Container,
             Self::Microvm(_) => RuntimeBackend::Microvm,
         }
     }
@@ -25,7 +23,6 @@ impl RuntimeExecPlan {
     pub fn profile_id(&self) -> &str {
         match self {
             Self::Sandbox(plan) => plan.profile_id.as_str(),
-            Self::Container(plan) => plan.profile_id.as_str(),
             Self::Microvm(plan) => plan.profile_id.as_str(),
         }
     }
@@ -38,19 +35,6 @@ pub struct SandboxRuntimePlan {
     pub readonly_roots: Vec<String>,
     pub allowed_network: Vec<NetEndpoint>,
     pub syscall_policy: String,
-    pub network_mode: String,
-    pub limits: BackendResourceLimits,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ContainerRuntimePlan {
-    pub profile_id: String,
-    pub rootless: bool,
-    pub drop_linux_capabilities: Vec<String>,
-    pub seccomp_profile: String,
-    pub readonly_rootfs: bool,
-    pub allowed_volumes: Vec<String>,
-    pub allowed_network: Vec<NetEndpoint>,
     pub network_mode: String,
     pub limits: BackendResourceLimits,
 }
@@ -110,9 +94,6 @@ impl RuntimeCompiler {
         match (selected.backend, profile) {
             (RuntimeBackend::Sandbox, BackendProfile::Sandbox(profile)) => Ok(
                 RuntimeExecPlan::Sandbox(adapter_sandbox::compile(profile, allowed_network)),
-            ),
-            (RuntimeBackend::Container, BackendProfile::Container(profile)) => Ok(
-                RuntimeExecPlan::Container(adapter_container::compile(profile, allowed_network)),
             ),
             (RuntimeBackend::Microvm, BackendProfile::Microvm(profile)) => Ok(
                 RuntimeExecPlan::Microvm(adapter_microvm::compile(profile, allowed_network)),

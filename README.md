@@ -7,7 +7,6 @@ It turns high-risk agent operations into auditable decisions (`allow` / `deny` /
 
 The runtime backends are:
 - sandbox
-- container
 - microvm
 
 ## Quick Start
@@ -54,7 +53,7 @@ cargo xtask package bundle
 
 - Operations are normalized and converted into requested capabilities before policy evaluation.
 - Policy decisions follow capability checks (`allow` / `deny` / `ask`).
-- Execution is delegated to an isolated backend (sandbox/container/microvm).
+- Execution is delegated to an isolated backend (sandbox/microvm).
 - Default sandbox behavior:
   - filesystem mode is `restricted`
   - network `disabled`
@@ -308,6 +307,5 @@ Completed:
 Planned:
 - [ ] Python SDK
 - [ ] Node.js SDK
-- [ ] Container execution backend
 - [ ] MicroVM execution backend
 - [ ] Cross platform support (Linux/Windows/macOS)

@@ -12,7 +12,10 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
+    run_daemon().await
+}
 
+async fn run_daemon() -> Result<()> {
     let config = DaemonConfig::load()?;
     let daemon = BootstrappedDaemon::new(config)?;
     daemon.run().await

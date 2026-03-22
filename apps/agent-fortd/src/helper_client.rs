@@ -29,17 +29,7 @@ impl HelperClient {
         let request = HelperExecuteRequest::new(request);
         let encoded = serde_json::to_vec(&request).context("serialize helper request")?;
 
-        let mut child = Command::new(&self.helper_path)
-            .arg("--bwrap-path")
-            .arg(&self.bwrap_path)
-            .arg("--cgroup-root")
-            .arg(&self.cgroup_root)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .with_context(|| format!("spawn helper at {}", self.helper_path.display()))?;
-
+        let mut child = self.spawn_helper_process()?;
         let mut stdin = child
             .stdin
             .take()
@@ -77,6 +67,19 @@ impl HelperClient {
         response
             .result
             .context("helper response had ok=true but missing result")
+    }
+
+    fn spawn_helper_process(&self) -> Result<std::process::Child> {
+        Command::new(&self.helper_path)
+            .arg("--bwrap-path")
+            .arg(&self.bwrap_path)
+            .arg("--cgroup-root")
+            .arg(&self.cgroup_root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .with_context(|| format!("spawn helper at {}", self.helper_path.display()))
     }
 }
 

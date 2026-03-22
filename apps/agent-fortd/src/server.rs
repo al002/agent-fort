@@ -32,10 +32,17 @@ impl DaemonServer {
                 .context("accept rpc connection")?;
             let controller = self.controller.clone();
             tokio::spawn(async move {
-                if let Err(error) = controller.handle_connection(connection).await {
-                    error!(error = %error, "rpc connection failed");
-                }
+                handle_connection_task(controller, connection).await;
             });
         }
+    }
+}
+
+async fn handle_connection_task(
+    controller: RpcController,
+    connection: af_rpc_transport::RpcConnection,
+) {
+    if let Err(error) = controller.handle_connection(connection).await {
+        error!(error = %error, "rpc connection failed");
     }
 }

@@ -120,15 +120,18 @@ enum EncodedCondition {
     ShellWrapper { wrapper: String },
 }
 
-fn rule_builder<'v, 'a>(eval: &Evaluator<'v, 'a, '_>) -> RefMut<'a, RuleBuilder> {
-    eval.extra
+fn rule_builder<'v, 'a>(eval: &Evaluator<'v, 'a, '_>) -> AnyhowResult<RefMut<'a, RuleBuilder>> {
+    let extra = eval
+        .extra
         .as_ref()
-        .expect("rule builder requires Evaluator.extra")
+        .ok_or_else(|| anyhow!("rule builder requires Evaluator.extra"))?;
+    let builder = extra
         .downcast_ref::<RefCell<RuleBuilder>>()
-        .expect("Evaluator.extra must contain RuleBuilder")
-        .borrow_mut()
+        .ok_or_else(|| anyhow!("Evaluator.extra must contain RuleBuilder"))?;
+    Ok(builder.borrow_mut())
 }
 
+#[allow(clippy::too_many_arguments)]
 #[starlark_module]
 fn command_rule_builtins(builder: &mut GlobalsBuilder) {
     fn command_rule<'v>(
@@ -156,7 +159,7 @@ fn command_rule_builtins(builder: &mut GlobalsBuilder) {
             .transpose()?
             .unwrap_or_default();
 
-        let mut builder = rule_builder(eval);
+        let mut builder = rule_builder(eval)?;
         let capabilities = builder.capabilities_from_handle(capabilities)?;
         let line = eval
             .call_stack_top_location()
@@ -218,7 +221,7 @@ fn command_rule_builtins(builder: &mut GlobalsBuilder) {
                 .transpose()?
                 .unwrap_or_default(),
         };
-        Ok(rule_builder(eval).push_capabilities(spec))
+        Ok(rule_builder(eval)?.push_capabilities(spec))
     }
 
     fn net<'v>(
@@ -496,7 +499,7 @@ fn parse_examples<'v>(items: UnpackList<Value<'v>>) -> AnyhowResult<Vec<Vec<Stri
             let Some(list) = ListRef::from_value(item) else {
                 bail!("example must be string or list of strings");
             };
-            parse_list_example(&list)
+            parse_list_example(list)
         })
         .collect()
 }

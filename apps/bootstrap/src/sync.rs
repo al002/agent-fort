@@ -97,7 +97,7 @@ pub fn run(args: SyncArgs) -> Result<SyncOutput> {
         daemon_path: daemon_path.clone(),
         bwrap_path: bwrap_path.clone(),
         helper_path: helper_path.clone(),
-        bundle_sha256: bundle_sha256,
+        bundle_sha256,
         manifest_source: manifest_source_text,
         synced_at_unix_s: unix_now_s()?,
     };

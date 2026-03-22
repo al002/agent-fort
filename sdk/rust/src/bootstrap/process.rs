@@ -74,25 +74,21 @@ fn build_sync_args(config: &ResolvedBootstrapConfig) -> Vec<OsString> {
 }
 
 fn build_start_args(config: &ResolvedBootstrapConfig) -> Vec<OsString> {
-    let mut args = Vec::new();
-    args.push(OsString::from("start"));
-    args.push(OsString::from("--install-root"));
-    args.push(config.install_root.as_os_str().to_owned());
-
-    args.push(OsString::from("--endpoint"));
-    args.push(OsString::from(&config.endpoint));
-
-    args.push(OsString::from("--startup-timeout-ms"));
-    args.push(OsString::from(DEFAULT_STARTUP_TIMEOUT_MS.to_string()));
-
-    args.push(OsString::from("--ping-interval-ms"));
-    args.push(OsString::from(DEFAULT_PING_INTERVAL_MS.to_string()));
-
-    args.push(OsString::from("--policy-dir"));
-    args.push(config.policy_dir.as_os_str().to_owned());
-
-    args.push(OsString::from("--command-rules-dir"));
-    args.push(config.command_rules_dir.as_os_str().to_owned());
+    let mut args = vec![
+        OsString::from("start"),
+        OsString::from("--install-root"),
+        config.install_root.as_os_str().to_owned(),
+        OsString::from("--endpoint"),
+        OsString::from(&config.endpoint),
+        OsString::from("--startup-timeout-ms"),
+        OsString::from(DEFAULT_STARTUP_TIMEOUT_MS.to_string()),
+        OsString::from("--ping-interval-ms"),
+        OsString::from(DEFAULT_PING_INTERVAL_MS.to_string()),
+        OsString::from("--policy-dir"),
+        config.policy_dir.as_os_str().to_owned(),
+        OsString::from("--command-rules-dir"),
+        config.command_rules_dir.as_os_str().to_owned(),
+    ];
     if let Some(command_rules_strict) = config.command_rules_strict {
         args.push(OsString::from("--command-rules-strict"));
         args.push(OsString::from(if command_rules_strict {
@@ -163,8 +159,18 @@ fn run_bootstrap(
         });
     }
 
+    let status = match status {
+        Some(status) => status,
+        None => {
+            return Err(SdkError::BootstrapCommandTimeout {
+                command: command_name.to_string(),
+                timeout_ms,
+            });
+        }
+    };
+
     Ok(CommandOutput {
-        status: status.expect("status exists when not timed out"),
+        status,
         stdout: String::from_utf8_lossy(&stdout_buf).trim().to_string(),
         stderr: String::from_utf8_lossy(&stderr_buf).trim().to_string(),
     })

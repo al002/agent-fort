@@ -1,8 +1,7 @@
 use std::{env, path::PathBuf};
 
-fn main() {
-    let manifest_dir =
-        PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set"));
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
     let workspace_root = manifest_dir.join("../..");
     let proto_root = manifest_dir.join("../../proto");
     let proto_files = [
@@ -30,12 +29,11 @@ fn main() {
         workspace_root.join("buf.work.yaml").display()
     );
 
-    let protoc = protoc_bin_vendored::protoc_bin_path().expect("vendored protoc is available");
+    let protoc = protoc_bin_vendored::protoc_bin_path()?;
     unsafe {
         env::set_var("PROTOC", protoc);
     }
 
-    prost_build::Config::new()
-        .compile_protos(&proto_files, &[proto_root])
-        .expect("proto compilation should succeed");
+    prost_build::Config::new().compile_protos(&proto_files, &[proto_root])?;
+    Ok(())
 }

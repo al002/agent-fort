@@ -128,8 +128,8 @@ struct ApprovalSnapshot {
 
 #[derive(Debug, Clone)]
 enum AuthorizationResult {
-    Allow(AllowExecutionPlan),
-    Ask(AskExecutionPlan),
+    Allow(Box<AllowExecutionPlan>),
+    Ask(Box<AskExecutionPlan>),
     Deny { reason: String, code: &'static str },
 }
 
@@ -339,7 +339,12 @@ impl RpcController {
             goal,
             operation,
         } = request;
-        let operation = operation.expect("operation validated above");
+        let Some(operation) = operation else {
+            return err(
+                RpcErrorCode::BadRequest,
+                "create_task operation is required",
+            );
+        };
 
         if let Some(response) =
             self.ensure_session_access(&session_id, &client_instance_id, &rebind_token)

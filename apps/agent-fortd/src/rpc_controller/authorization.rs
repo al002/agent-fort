@@ -18,7 +18,7 @@ pub(super) fn authorize_interactive(
     ) {
         CapabilityDecision::Allow => {
             match compile_allow_plan(normalized, requested, active_policy, session_grant) {
-                Ok(plan) => Ok(AuthorizationResult::Allow(plan)),
+                Ok(plan) => Ok(AuthorizationResult::Allow(Box::new(plan))),
                 Err(reason) => Ok(AuthorizationResult::Deny {
                     reason,
                     code: "POLICY_DENIED",
@@ -26,13 +26,13 @@ pub(super) fn authorize_interactive(
             }
         }
         CapabilityDecision::Ask { delta, reason } => {
-            Ok(AuthorizationResult::Ask(AskExecutionPlan {
+            Ok(AuthorizationResult::Ask(Box::new(AskExecutionPlan {
                 requested,
                 delta,
                 reason,
                 session_grant_revision: session_grant.revision,
                 policy_revision: active_policy.policy.revision,
-            }))
+            })))
         }
         CapabilityDecision::Deny { reason } => Ok(AuthorizationResult::Deny {
             reason,

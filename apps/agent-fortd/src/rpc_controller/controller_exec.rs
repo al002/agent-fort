@@ -24,10 +24,10 @@ impl RpcController {
 
         match authorize_interactive(normalized, &active_policy, &session_grant)? {
             AuthorizationResult::Allow(plan) => {
-                execute_allow_path(&self.state.store, runtime, task, &plan)
+                execute_allow_path(&self.state.store, runtime, task, plan.as_ref())
             }
             AuthorizationResult::Ask(plan) => {
-                execute_ask_path(&self.state.store, task, &operation, &plan)
+                execute_ask_path(&self.state.store, task, &operation, plan.as_ref())
             }
             AuthorizationResult::Deny { reason, code } => {
                 execute_deny_path(&self.state.store, task, reason, code)

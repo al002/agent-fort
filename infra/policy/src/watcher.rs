@@ -507,11 +507,10 @@ mod tests {
         let watcher = PolicyDirectoryWatcher::start(&root).expect("start watcher");
         fs::write(root.join("static_policy.yaml"), "version: 2").expect("rewrite policy file");
 
-        let event = watcher
+        watcher
             .recv_timeout(Duration::from_secs(2))
             .expect("wait for watch event")
             .expect("watch event should arrive");
-        assert_eq!(event, ());
     }
 
     #[test]
@@ -555,10 +554,9 @@ mod tests {
         let watcher = PolicyDirectoryWatcher::start(&root).expect("start watcher");
         fs::write(root.join("00-base.rules"), "command_rule()").expect("write rule file");
 
-        let event = watcher
+        watcher
             .recv_timeout(Duration::from_secs(2))
             .expect("wait for watch event")
             .expect("watch event should arrive");
-        assert_eq!(event, ());
     }
 }

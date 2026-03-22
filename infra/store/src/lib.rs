@@ -103,8 +103,7 @@ impl Store {
     }
 
     pub fn schema_version(&self) -> StoreResult<u64> {
-        self.worker
-            .execute(|connection| migrations::current_version(connection))
+        self.worker.execute(migrations::current_version)
     }
 
     #[allow(dead_code)]

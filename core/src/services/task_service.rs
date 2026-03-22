@@ -1,11 +1,11 @@
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use af_audit::{AuditEventType, NewAuditEvent};
 use af_task::{NewTask, Task, TaskCreatedBy, TaskStatus};
 use uuid::Uuid;
 
 use crate::errors::TaskAppError;
+use crate::time::now_ms;
 
 #[derive(Debug, Clone)]
 pub struct CreateTaskInput {
@@ -116,17 +116,6 @@ fn validate_non_empty(field: &str, value: &str) -> Result<(), TaskAppError> {
         });
     }
     Ok(())
-}
-
-fn now_ms() -> u64 {
-    let now = SystemTime::now();
-    let elapsed = now
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock is after unix epoch");
-    elapsed
-        .as_millis()
-        .try_into()
-        .expect("timestamp fits into u64")
 }
 
 #[cfg(test)]

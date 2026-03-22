@@ -284,10 +284,10 @@ fn collect_hosts(value: &Value, current_key: Option<&str>, output: &mut Vec<Stri
             }
         }
         Value::String(text) => {
-            if is_host_key(current_key) || text.contains("://") {
-                if let Some(host) = extract_host(text) {
-                    output.push(host);
-                }
+            if (is_host_key(current_key) || text.contains("://"))
+                && let Some(host) = extract_host(text)
+            {
+                output.push(host);
             }
         }
         _ => {}
@@ -351,7 +351,7 @@ fn normalize_lexical_path(path: &Path) -> PathBuf {
             Component::RootDir => normalized.push(Path::new("/")),
             Component::CurDir => {}
             Component::ParentDir => {
-                if normalized != PathBuf::from("/") {
+                if normalized != Path::new("/") {
                     normalized.pop();
                 }
             }

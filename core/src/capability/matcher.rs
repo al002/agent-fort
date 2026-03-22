@@ -4,6 +4,17 @@ use af_policy::{BackendCapabilityLimits, CapabilitySet, NetRule};
 
 use super::{NetEndpoint, RequestedCapabilities};
 
+struct CapabilityPatterns<'a> {
+    fs_read: &'a [String],
+    fs_write: &'a [String],
+    fs_delete: &'a [String],
+    net_connect: &'a [NetRule],
+    allow_host_exec: bool,
+    allow_process_control: bool,
+    allow_privilege: bool,
+    allow_credential_access: bool,
+}
+
 pub fn normalize_lexical_path(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
@@ -12,7 +23,7 @@ pub fn normalize_lexical_path(path: &Path) -> PathBuf {
             Component::RootDir => normalized.push(Path::new("/")),
             Component::CurDir => {}
             Component::ParentDir => {
-                if normalized != PathBuf::from("/") {
+                if normalized != Path::new("/") {
                     normalized.pop();
                 }
             }
@@ -31,80 +42,79 @@ pub fn requested_within_capabilities(
     requested: &RequestedCapabilities,
     capabilities: &CapabilitySet,
 ) -> bool {
-    requested_within_patterns(
-        requested,
-        &capabilities.fs_read,
-        &capabilities.fs_write,
-        &capabilities.fs_delete,
-        &capabilities.net_connect,
-        capabilities.allow_host_exec,
-        capabilities.allow_process_control,
-        capabilities.allow_privilege,
-        capabilities.allow_credential_access,
-    )
+    requested_within_patterns(requested, &patterns_from_capabilities(capabilities))
 }
 
 pub fn requested_within_backend_limits(
     requested: &RequestedCapabilities,
     limits: &BackendCapabilityLimits,
 ) -> bool {
-    requested_within_patterns(
-        requested,
-        &limits.fs_read,
-        &limits.fs_write,
-        &limits.fs_delete,
-        &limits.net_connect,
-        limits.allow_host_exec,
-        limits.allow_process_control,
-        limits.allow_privilege,
-        limits.allow_credential_access,
-    )
+    requested_within_patterns(requested, &patterns_from_limits(limits))
 }
 
 fn requested_within_patterns(
     requested: &RequestedCapabilities,
-    fs_read: &[String],
-    fs_write: &[String],
-    fs_delete: &[String],
-    net_connect: &[NetRule],
-    allow_host_exec: bool,
-    allow_process_control: bool,
-    allow_privilege: bool,
-    allow_credential_access: bool,
+    patterns: &CapabilityPatterns<'_>,
 ) -> bool {
     if requested
         .fs_read
         .iter()
-        .any(|path| !path_matches_any(path, fs_read))
+        .any(|path| !path_matches_any(path, patterns.fs_read))
     {
         return false;
     }
     if requested
         .fs_write
         .iter()
-        .any(|path| !path_matches_any(path, fs_write))
+        .any(|path| !path_matches_any(path, patterns.fs_write))
     {
         return false;
     }
     if requested
         .fs_delete
         .iter()
-        .any(|path| !path_matches_any(path, fs_delete))
+        .any(|path| !path_matches_any(path, patterns.fs_delete))
     {
         return false;
     }
     if requested
         .net_connect
         .iter()
-        .any(|endpoint| !endpoint_matches_any(endpoint, net_connect))
+        .any(|endpoint| !endpoint_matches_any(endpoint, patterns.net_connect))
     {
         return false;
     }
 
-    (!requested.host_exec || allow_host_exec)
-        && (!requested.process_control || allow_process_control)
-        && (!requested.privilege || allow_privilege)
-        && (!requested.credential_access || allow_credential_access)
+    (!requested.host_exec || patterns.allow_host_exec)
+        && (!requested.process_control || patterns.allow_process_control)
+        && (!requested.privilege || patterns.allow_privilege)
+        && (!requested.credential_access || patterns.allow_credential_access)
+}
+
+fn patterns_from_capabilities(capabilities: &CapabilitySet) -> CapabilityPatterns<'_> {
+    CapabilityPatterns {
+        fs_read: &capabilities.fs_read,
+        fs_write: &capabilities.fs_write,
+        fs_delete: &capabilities.fs_delete,
+        net_connect: &capabilities.net_connect,
+        allow_host_exec: capabilities.allow_host_exec,
+        allow_process_control: capabilities.allow_process_control,
+        allow_privilege: capabilities.allow_privilege,
+        allow_credential_access: capabilities.allow_credential_access,
+    }
+}
+
+fn patterns_from_limits(limits: &BackendCapabilityLimits) -> CapabilityPatterns<'_> {
+    CapabilityPatterns {
+        fs_read: &limits.fs_read,
+        fs_write: &limits.fs_write,
+        fs_delete: &limits.fs_delete,
+        net_connect: &limits.net_connect,
+        allow_host_exec: limits.allow_host_exec,
+        allow_process_control: limits.allow_process_control,
+        allow_privilege: limits.allow_privilege,
+        allow_credential_access: limits.allow_credential_access,
+    }
 }
 
 pub fn capability_set_within_policy(left: &CapabilitySet, right: &CapabilitySet) -> bool {

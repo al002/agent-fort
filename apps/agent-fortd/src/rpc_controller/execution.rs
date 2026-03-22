@@ -413,14 +413,15 @@ pub(super) fn network_policy_from_plan(
 }
 
 pub(super) fn now_ms() -> u64 {
-    let now = SystemTime::now();
-    let elapsed = now
+    let elapsed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("system clock is after unix epoch");
-    elapsed
-        .as_millis()
-        .try_into()
-        .expect("timestamp fits into u64")
+        .unwrap_or_default();
+    let millis = elapsed.as_millis();
+    if millis > u64::MAX as u128 {
+        u64::MAX
+    } else {
+        millis as u64
+    }
 }
 
 fn initial_session_grant(static_capabilities: &CapabilitySet) -> CapabilitySet {
@@ -591,34 +592,6 @@ fn command_from_normalized(
         ]),
         Some(NormalizedCommand::Argv(argv)) if !argv.is_empty() => Some(argv.clone()),
         _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn command_from_normalized_uses_custom_shell_for_shell_command() {
-        let command = command_from_normalized(
-            Some(&NormalizedCommand::Shell("echo hi".to_string())),
-            Some("/bin/bash"),
-        )
-        .expect("command");
-        assert_eq!(command, vec!["/bin/bash", "-c", "echo hi"]);
-    }
-
-    #[test]
-    fn command_from_normalized_keeps_argv_unchanged() {
-        let command = command_from_normalized(
-            Some(&NormalizedCommand::Argv(vec![
-                "/usr/bin/env".to_string(),
-                "true".to_string(),
-            ])),
-            Some("/bin/bash"),
-        )
-        .expect("command");
-        assert_eq!(command, vec!["/usr/bin/env", "true"]);
     }
 }
 
@@ -820,4 +793,32 @@ fn append_task_audit(
         })
         .map_err(map_audit_repo_error)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_from_normalized_uses_custom_shell_for_shell_command() {
+        let command = command_from_normalized(
+            Some(&NormalizedCommand::Shell("echo hi".to_string())),
+            Some("/bin/bash"),
+        )
+        .expect("command");
+        assert_eq!(command, vec!["/bin/bash", "-c", "echo hi"]);
+    }
+
+    #[test]
+    fn command_from_normalized_keeps_argv_unchanged() {
+        let command = command_from_normalized(
+            Some(&NormalizedCommand::Argv(vec![
+                "/usr/bin/env".to_string(),
+                "true".to_string(),
+            ])),
+            Some("/bin/bash"),
+        )
+        .expect("command");
+        assert_eq!(command, vec!["/usr/bin/env", "true"]);
+    }
 }

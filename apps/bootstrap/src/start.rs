@@ -27,6 +27,16 @@ pub struct StartOutput {
     pub daemon_instance_id: String,
 }
 
+struct DaemonSpawnConfig<'a> {
+    endpoint: &'a str,
+    bwrap_path: &'a Path,
+    helper_path: &'a Path,
+    policy_dir: Option<&'a Path>,
+    command_rules_dir: Option<&'a Path>,
+    command_rules_strict: Option<bool>,
+    store_path: Option<&'a Path>,
+}
+
 pub fn run(args: StartArgs) -> Result<StartOutput> {
     let install_root = resolve_install_root(args.install_root);
     let mut state = InstallState::load(&install_root)?;
@@ -58,13 +68,15 @@ pub fn run(args: StartArgs) -> Result<StartOutput> {
 
     let daemon_pid = spawn_daemon(
         &state.daemon_path,
-        &endpoint,
-        &bwrap_path,
-        &state.helper_path,
-        Some(policy_dir.as_path()),
-        Some(command_rules_dir.as_path()),
-        args.command_rules_strict,
-        args.store_path.as_deref(),
+        DaemonSpawnConfig {
+            endpoint: &endpoint,
+            bwrap_path: &bwrap_path,
+            helper_path: &state.helper_path,
+            policy_dir: Some(policy_dir.as_path()),
+            command_rules_dir: Some(command_rules_dir.as_path()),
+            command_rules_strict: args.command_rules_strict,
+            store_path: args.store_path.as_deref(),
+        },
     )?;
     let deadline = Instant::now() + Duration::from_millis(args.startup_timeout_ms);
     let poll_interval = Duration::from_millis(args.ping_interval_ms.max(10));
@@ -191,34 +203,25 @@ fn read_frame(stream: &mut impl Read) -> Result<Vec<u8>> {
     Ok(payload)
 }
 
-fn spawn_daemon(
-    daemon_path: &Path,
-    endpoint: &str,
-    bwrap_path: &Path,
-    helper_path: &Path,
-    policy_dir: Option<&Path>,
-    command_rules_dir: Option<&Path>,
-    command_rules_strict: Option<bool>,
-    store_path: Option<&Path>,
-) -> Result<u32> {
+fn spawn_daemon(daemon_path: &Path, config: DaemonSpawnConfig<'_>) -> Result<u32> {
     let mut command = Command::new(daemon_path);
     command
         .arg("--endpoint")
-        .arg(endpoint)
+        .arg(config.endpoint)
         .arg("--bwrap-path")
-        .arg(bwrap_path)
+        .arg(config.bwrap_path)
         .arg("--helper-path")
-        .arg(helper_path)
+        .arg(config.helper_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    if let Some(policy_dir) = policy_dir {
+    if let Some(policy_dir) = config.policy_dir {
         command.arg("--policy-dir").arg(policy_dir);
     }
-    if let Some(command_rules_dir) = command_rules_dir {
+    if let Some(command_rules_dir) = config.command_rules_dir {
         command.arg("--command-rules-dir").arg(command_rules_dir);
     }
-    if let Some(command_rules_strict) = command_rules_strict {
+    if let Some(command_rules_strict) = config.command_rules_strict {
         command
             .arg("--command-rules-strict")
             .arg(if command_rules_strict {
@@ -227,7 +230,7 @@ fn spawn_daemon(
                 "false"
             });
     }
-    if let Some(store_path) = store_path {
+    if let Some(store_path) = config.store_path {
         command.arg("--store-path").arg(store_path);
     }
 

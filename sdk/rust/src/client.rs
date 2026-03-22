@@ -243,10 +243,7 @@ impl AgentFortClient {
         }
 
         let ping_result = {
-            let runtime = self
-                .runtime
-                .as_mut()
-                .expect("runtime must exist after ensure_runtime");
+            let runtime = self.runtime_mut()?;
             runtime.ping().await
         };
 
@@ -255,11 +252,7 @@ impl AgentFortClient {
             Err(SdkError::Transport(_)) => {
                 self.runtime = None;
                 self.ensure_runtime().await?;
-                self.runtime
-                    .as_mut()
-                    .expect("runtime must exist after restart")
-                    .ping()
-                    .await
+                self.runtime_mut()?.ping().await
             }
             Err(error) => Err(error),
         }
@@ -285,11 +278,7 @@ impl AgentFortClient {
     /// ```
     pub async fn sessions(&mut self) -> Result<SessionClient<'_>> {
         self.ensure_runtime().await?;
-        Ok(SessionClient::new(
-            self.runtime
-                .as_mut()
-                .expect("runtime must exist after ensure_runtime"),
-        ))
+        Ok(SessionClient::new(self.runtime_mut()?))
     }
 
     /// Returns a task sub-client bound to this runtime connection.
@@ -330,11 +319,7 @@ impl AgentFortClient {
     /// ```
     pub async fn tasks(&mut self) -> Result<TaskClient<'_>> {
         self.ensure_runtime().await?;
-        Ok(TaskClient::new(
-            self.runtime
-                .as_mut()
-                .expect("runtime must exist after ensure_runtime"),
-        ))
+        Ok(TaskClient::new(self.runtime_mut()?))
     }
 
     /// Returns an approval sub-client bound to this runtime connection.
@@ -356,11 +341,7 @@ impl AgentFortClient {
     /// ```
     pub async fn approvals(&mut self) -> Result<ApprovalClient<'_>> {
         self.ensure_runtime().await?;
-        Ok(ApprovalClient::new(
-            self.runtime
-                .as_mut()
-                .expect("runtime must exist after ensure_runtime"),
-        ))
+        Ok(ApprovalClient::new(self.runtime_mut()?))
     }
 
     async fn ensure_runtime(&mut self) -> Result<()> {
@@ -387,5 +368,11 @@ impl AgentFortClient {
             RuntimeClient::connect(&start.endpoint, self.config.agent_name.clone()).await?;
         self.runtime = Some(runtime);
         Ok(())
+    }
+
+    fn runtime_mut(&mut self) -> Result<&mut RuntimeClient> {
+        self.runtime
+            .as_mut()
+            .ok_or_else(|| SdkError::Protocol("runtime connection not initialized".to_string()))
     }
 }

@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::error::{Result, SdkError};
 
 /// Options for `CreateSession` RPC calls.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CreateSessionOptions {
     /// Agent name for the created session.
     ///
@@ -21,15 +21,6 @@ pub struct CreateSessionOptions {
     ///
     /// When omitted, runtime defaults to `300` seconds.
     pub lease_ttl_secs: Option<u64>,
-}
-
-impl Default for CreateSessionOptions {
-    fn default() -> Self {
-        Self {
-            agent_name: None,
-            lease_ttl_secs: None,
-        }
-    }
 }
 
 impl CreateSessionOptions {

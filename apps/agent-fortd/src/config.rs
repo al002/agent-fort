@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use af_rpc_transport::Endpoint;
 use af_sandbox::ResourceGovernanceMode;
@@ -213,7 +213,7 @@ fn default_config_root() -> PathBuf {
     home.join(".config").join("agent-fort")
 }
 
-fn ensure_policy_exists(policy_dir: &PathBuf) -> Result<()> {
+fn ensure_policy_exists(policy_dir: &Path) -> Result<()> {
     let yaml = policy_dir.join("static_policy.yaml");
     if yaml.is_file() {
         return Ok(());
@@ -313,6 +313,6 @@ mod tests {
         let temp = TempDir::new().expect("create temp dir");
         std::fs::write(temp.path().join("static_policy.yaml"), "version: 1\n")
             .expect("write policy");
-        ensure_policy_exists(&temp.path().to_path_buf()).expect("policy should be accepted");
+        ensure_policy_exists(temp.path()).expect("policy should be accepted");
     }
 }

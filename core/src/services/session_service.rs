@@ -1,11 +1,11 @@
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use af_audit::{AuditEventType, NewAuditEvent};
 use af_session::{NewSession, Session, SessionLease};
 use uuid::Uuid;
 
 use crate::errors::SessionAppError;
+use crate::time::now_ms;
 
 const DEFAULT_LEASE_TTL_SECS: u64 = 300;
 
@@ -120,17 +120,6 @@ fn validate_non_empty(field: &str, value: &str) -> Result<(), SessionAppError> {
         });
     }
     Ok(())
-}
-
-fn now_ms() -> u64 {
-    let now = SystemTime::now();
-    let elapsed = now
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock is after unix epoch");
-    elapsed
-        .as_millis()
-        .try_into()
-        .expect("timestamp fits into u64")
 }
 
 #[cfg(test)]

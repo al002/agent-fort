@@ -3,7 +3,7 @@ use std::sync::Mutex;
 
 use af_policy_infra::{PolicyRuntime, PolicyRuntimeConfig};
 use af_store::Store;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use tracing::info;
 
 use crate::config::DaemonConfig;
@@ -37,7 +37,7 @@ impl BootstrappedDaemon {
         )?));
         let policy_status = policy_runtime
             .lock()
-            .expect("policy runtime lock should not be poisoned")
+            .map_err(|_| anyhow!("policy runtime lock poisoned"))?
             .status()?;
         info!(
             policy_dir = %config.policy_dir.display(),

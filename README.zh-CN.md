@@ -2,6 +2,9 @@
 
 **中文** | [English](./README.md)
 
+> [!WARNING]
+> 项目仍在开发中，暂不适合用于生产环境。
+
 Agent Fort 是给 AI Agent 使用的 security runtime SDK。
 它将高风险操作转换为可审计的决策（`allow` / `deny` / `ask`），并在审批通过后交由隔离执行后端完成执行。
 

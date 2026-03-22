@@ -2,6 +2,9 @@
 
 **English** | [中文](./README.zh-CN.md)
 
+> [!WARNING]
+> This project is under active development and is not ready for production use.
+
 Agent Fort is a security runtime SDK for AI agents.
 It turns high-risk agent operations into auditable decisions (`allow` / `deny` / `ask`), and executes approved tasks in isolated runtime backends.
 

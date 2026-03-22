@@ -50,3 +50,17 @@ pub enum TaskAppError {
     #[error("task internal error: {message}")]
     Internal { message: String },
 }
+
+#[derive(Debug, Error)]
+pub enum CapabilityGrantAppError {
+    #[error("capability grant validation failed: {message}")]
+    Validation { message: String },
+    #[error("capability grant conflict: {message}")]
+    Conflict { message: String },
+    #[error("capability grant policy denied: {message}")]
+    PolicyDenied { message: String },
+    #[error("capability grant storage failed: {message}")]
+    Store { message: String },
+    #[error("capability grant internal error: {message}")]
+    Internal { message: String },
+}

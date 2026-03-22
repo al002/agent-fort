@@ -12,7 +12,7 @@ pub use capability::{
     capability_set_within_policy, intersect_requested_with_capabilities,
     missing_from_session_grant, requested_within_backend_limits, requested_within_capabilities,
 };
-pub use errors::{ApprovalAppError, SessionAppError, TaskAppError};
+pub use errors::{ApprovalAppError, CapabilityGrantAppError, SessionAppError, TaskAppError};
 pub use operation::{
     NormalizeError, NormalizedCommand, NormalizedOperation, OperationKind, OperationNormalizer,
     RawOperation, RuntimeContext, RuntimePlatform,
@@ -23,8 +23,9 @@ pub use runtime::{
     SelectedBackend,
 };
 pub use services::{
-    ApprovalAppService, ApprovalPort, CancelTaskInput, CancelTaskWrite, CreateSessionInput,
+    ApprovalAppService, ApprovalPort, CancelTaskInput, CancelTaskWrite, CapabilityGrantAppService,
+    CapabilityGrantPort, CapabilityGrantState, CreateApprovalInput, CreateSessionInput,
     CreateSessionWrite, CreateTaskInput, CreateTaskWrite, GetApprovalInput, RespondApprovalInput,
     RespondApprovalResult, SessionAppService, SessionConfig, SessionWritePort, TaskAppService,
-    TaskPort,
+    TaskExecutionAppService, TaskExecutionPort, TaskPort,
 };

@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use af_approval::{Approval, ApprovalDecision, RespondApprovalCommand};
+use af_approval::{
+    Approval, ApprovalDecision, ApprovalItem, ApprovalStatus, NewApproval, RespondApprovalCommand,
+};
 use af_task::Task;
 
 use crate::errors::ApprovalAppError;
@@ -9,6 +11,22 @@ use crate::errors::ApprovalAppError;
 pub struct GetApprovalInput {
     pub session_id: String,
     pub approval_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateApprovalInput {
+    pub approval_id: String,
+    pub session_id: String,
+    pub task_id: String,
+    pub trace_id: String,
+    pub summary: String,
+    pub details: Option<String>,
+    pub items: Vec<ApprovalItem>,
+    pub policy_reason: String,
+    pub policy_revision: u64,
+    pub execution_contract_json: String,
+    pub created_at_ms: u64,
+    pub expires_at_ms: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -29,6 +47,8 @@ pub struct RespondApprovalResult {
 }
 
 pub trait ApprovalPort: Send + Sync {
+    fn create_approval(&self, command: NewApproval) -> Result<Approval, ApprovalAppError>;
+
     fn get_approval(
         &self,
         session_id: &str,
@@ -57,6 +77,50 @@ impl std::fmt::Debug for ApprovalAppService {
 impl ApprovalAppService {
     pub fn new(port: Arc<dyn ApprovalPort>) -> Self {
         Self { port }
+    }
+
+    pub fn create_approval(
+        &self,
+        input: CreateApprovalInput,
+    ) -> Result<Approval, ApprovalAppError> {
+        validate_non_empty("approval_id", &input.approval_id)?;
+        validate_non_empty("session_id", &input.session_id)?;
+        validate_non_empty("task_id", &input.task_id)?;
+        validate_non_empty("trace_id", &input.trace_id)?;
+        validate_non_empty("summary", &input.summary)?;
+        validate_non_empty("policy_reason", &input.policy_reason)?;
+        validate_non_empty("execution_contract_json", &input.execution_contract_json)?;
+        if input.created_at_ms == 0 {
+            return Err(ApprovalAppError::Validation {
+                message: "created_at_ms must be greater than 0".to_string(),
+            });
+        }
+        if input.expires_at_ms == 0 {
+            return Err(ApprovalAppError::Validation {
+                message: "expires_at_ms must be greater than 0".to_string(),
+            });
+        }
+        if input.expires_at_ms <= input.created_at_ms {
+            return Err(ApprovalAppError::Validation {
+                message: "expires_at_ms must be greater than created_at_ms".to_string(),
+            });
+        }
+
+        self.port.create_approval(NewApproval {
+            approval_id: input.approval_id,
+            session_id: input.session_id,
+            task_id: input.task_id,
+            trace_id: input.trace_id,
+            status: ApprovalStatus::Pending,
+            summary: input.summary,
+            details: input.details,
+            items: input.items,
+            policy_reason: input.policy_reason,
+            policy_revision: input.policy_revision,
+            execution_contract_json: input.execution_contract_json,
+            created_at_ms: input.created_at_ms,
+            expires_at_ms: input.expires_at_ms,
+        })
     }
 
     pub fn get_approval(&self, input: GetApprovalInput) -> Result<Approval, ApprovalAppError> {
@@ -111,6 +175,10 @@ mod tests {
     struct StubPort;
 
     impl ApprovalPort for StubPort {
+        fn create_approval(&self, _command: NewApproval) -> Result<Approval, ApprovalAppError> {
+            Ok(sample_approval())
+        }
+
         fn get_approval(
             &self,
             _session_id: &str,

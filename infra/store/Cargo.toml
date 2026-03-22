@@ -11,4 +11,5 @@ af-session = { path = "../../domain/session" }
 af-task = { path = "../../domain/task" }
 af-approval = { path = "../../domain/approval" }
 af-audit = { path = "../../domain/audit" }
+af-policy = { path = "../../domain/policy" }
 af-core = { path = "../../core" }

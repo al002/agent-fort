@@ -1,5 +1,6 @@
 use af_approval::{
-    Approval, ApprovalDecision, ApprovalRepository, ApprovalRepositoryError, RespondApprovalCommand,
+    Approval, ApprovalDecision, ApprovalRepository, ApprovalRepositoryError, NewApproval,
+    RespondApprovalCommand,
 };
 use af_audit::AuditEventType;
 use af_core::{ApprovalAppError, ApprovalPort, RespondApprovalResult};
@@ -15,6 +16,10 @@ use crate::sql_audit::audit_event_type_to_db;
 use crate::{Store, StoreError, StoreResult, sql_err, to_i64, to_u64};
 
 impl ApprovalPort for Store {
+    fn create_approval(&self, command: NewApproval) -> Result<Approval, ApprovalAppError> {
+        <Store as ApprovalRepository>::create_approval(self, command).map_err(on_repo_err)
+    }
+
     fn get_approval(
         &self,
         session_id: &str,

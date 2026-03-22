@@ -186,6 +186,7 @@ dependencies = [
  "af-approval",
  "af-audit",
  "af-core",
+ "af-policy",
  "af-session",
  "af-task",
  "rusqlite",

@@ -10,9 +10,9 @@ use sha2::{Digest, Sha256};
 use tar::Archive;
 use url::Url;
 
-use crate::command::{
-    InstallState, SyncArgs, resolve_endpoint, resolve_install_root, resolve_manifest_source,
-    unix_now_s,
+use crate::command::SyncArgs;
+use crate::state::{
+    InstallState, resolve_endpoint, resolve_install_root, resolve_manifest_source, unix_now_s,
 };
 
 const SHA256_HEX_LEN: usize = 64;
@@ -51,10 +51,10 @@ pub fn run(args: SyncArgs) -> Result<SyncOutput> {
     fs::create_dir_all(&install_root)
         .with_context(|| format!("create install root {}", install_root.display()))?;
 
-    let manifest_source_text = resolve_manifest_source(args.manifest_source, &install_root)
+    let manifest_source_raw = resolve_manifest_source(args.manifest_source, &install_root)
         .ok_or_else(|| anyhow::anyhow!("manifest source is required"))?;
-    let manifest_source = Source::parse(&manifest_source_text)?;
-    let manifest = read_manifest(&manifest_source)?;
+    let manifest_source = Source::parse(&manifest_source_raw)?;
+    let manifest = load_manifest(&manifest_source)?;
 
     if manifest.bundle.format != "tar.gz" {
         bail!(
@@ -76,16 +76,19 @@ pub fn run(args: SyncArgs) -> Result<SyncOutput> {
         .with_context(|| format!("create {}", extracted_root.display()))?;
     extract_bundle_tar_gz(&bundle_file, &extracted_root)?;
 
-    let daemon_rel_path =
-        validated_bundle_relative_path("daemon_rel_path", &manifest.bundle.daemon_rel_path)?;
-    let bwrap_rel_path =
-        validated_bundle_relative_path("bwrap_rel_path", &manifest.bundle.bwrap_rel_path)?;
-    let helper_rel_path =
-        validated_bundle_relative_path("helper_rel_path", &manifest.bundle.helper_rel_path)?;
+    let daemon_path = extracted_root.join(validated_bundle_relative_path(
+        "daemon_rel_path",
+        &manifest.bundle.daemon_rel_path,
+    )?);
+    let bwrap_path = extracted_root.join(validated_bundle_relative_path(
+        "bwrap_rel_path",
+        &manifest.bundle.bwrap_rel_path,
+    )?);
+    let helper_path = extracted_root.join(validated_bundle_relative_path(
+        "helper_rel_path",
+        &manifest.bundle.helper_rel_path,
+    )?);
 
-    let daemon_path = extracted_root.join(daemon_rel_path);
-    let bwrap_path = extracted_root.join(bwrap_rel_path);
-    let helper_path = extracted_root.join(helper_rel_path);
     ensure_file(&daemon_path, "daemon binary")?;
     ensure_file(&bwrap_path, "bwrap binary")?;
     ensure_file(&helper_path, "helper binary")?;
@@ -98,7 +101,7 @@ pub fn run(args: SyncArgs) -> Result<SyncOutput> {
         bwrap_path: bwrap_path.clone(),
         helper_path: helper_path.clone(),
         bundle_sha256,
-        manifest_source: manifest_source_text,
+        manifest_source: manifest_source_raw,
         synced_at_unix_s: unix_now_s()?,
     };
     state.save(&install_root)?;
@@ -109,12 +112,12 @@ pub fn run(args: SyncArgs) -> Result<SyncOutput> {
         daemon_path: daemon_path.display().to_string(),
         bwrap_path: bwrap_path.display().to_string(),
         helper_path: helper_path.display().to_string(),
-        endpoint: state.endpoint,
+        endpoint,
         install_state_path: InstallState::file_path(&install_root).display().to_string(),
     })
 }
 
-fn read_manifest(source: &Source) -> Result<SyncManifest> {
+fn load_manifest(source: &Source) -> Result<SyncManifest> {
     let raw = source.read_to_string()?;
     serde_json::from_str(&raw).context("parse manifest JSON")
 }
@@ -127,16 +130,17 @@ fn fetch_bundle_verified(
     let downloads_dir = install_root.join("downloads");
     fs::create_dir_all(&downloads_dir)
         .with_context(|| format!("create {}", downloads_dir.display()))?;
-    let tmp_destination = downloads_dir.join(format!(
+
+    let temp_file = downloads_dir.join(format!(
         ".tmp-{}-{}.tar.gz",
         std::process::id(),
         unix_now_s()?
     ));
-    source.copy_to(&tmp_destination)?;
+    source.copy_to(&temp_file)?;
 
-    let actual_sha256 = sha256_hex(&tmp_destination)?;
+    let actual_sha256 = sha256_hex(&temp_file)?;
     if actual_sha256 != expected_sha256 {
-        let _ = fs::remove_file(&tmp_destination);
+        let _ = fs::remove_file(&temp_file);
         bail!(
             "bundle sha256 mismatch: expected {}, got {}",
             expected_sha256,
@@ -149,13 +153,15 @@ fn fetch_bundle_verified(
         fs::remove_file(&destination)
             .with_context(|| format!("remove existing {}", destination.display()))?;
     }
-    fs::rename(&tmp_destination, &destination).with_context(|| {
+
+    fs::rename(&temp_file, &destination).with_context(|| {
         format!(
             "move verified bundle from {} to {}",
-            tmp_destination.display(),
+            temp_file.display(),
             destination.display()
         )
     })?;
+
     Ok(destination)
 }
 
@@ -163,6 +169,7 @@ fn sha256_hex(path: &Path) -> Result<String> {
     let mut file = fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 8192];
+
     loop {
         let read = file
             .read(&mut buffer)
@@ -172,6 +179,7 @@ fn sha256_hex(path: &Path) -> Result<String> {
         }
         hasher.update(&buffer[..read]);
     }
+
     Ok(format!("{:x}", hasher.finalize()))
 }
 
@@ -180,10 +188,11 @@ fn extract_bundle_tar_gz(bundle_path: &Path, destination: &Path) -> Result<()> {
         fs::File::open(bundle_path).with_context(|| format!("open {}", bundle_path.display()))?;
     let decoder = GzDecoder::new(file);
     let mut archive = Archive::new(decoder);
-    let entries = archive
+
+    for entry in archive
         .entries()
-        .with_context(|| format!("list archive entries from {}", bundle_path.display()))?;
-    for entry in entries {
+        .with_context(|| format!("list archive entries from {}", bundle_path.display()))?
+    {
         let mut entry =
             entry.with_context(|| format!("read archive entry from {}", bundle_path.display()))?;
         let entry_path = entry
@@ -191,6 +200,7 @@ fn extract_bundle_tar_gz(bundle_path: &Path, destination: &Path) -> Result<()> {
             .context("read archive entry path")?
             .into_owned();
         ensure_archive_entry_path_safe(&entry_path)?;
+
         let unpacked = entry.unpack_in(destination).with_context(|| {
             format!(
                 "extract archive entry {} into {}",
@@ -198,6 +208,7 @@ fn extract_bundle_tar_gz(bundle_path: &Path, destination: &Path) -> Result<()> {
                 destination.display()
             )
         })?;
+
         if !unpacked {
             bail!(
                 "archive entry escapes destination: {}",
@@ -205,6 +216,7 @@ fn extract_bundle_tar_gz(bundle_path: &Path, destination: &Path) -> Result<()> {
             );
         }
     }
+
     Ok(())
 }
 
@@ -224,18 +236,20 @@ fn default_helper_rel_path() -> String {
 }
 
 fn normalize_sha256(raw: &str) -> Result<String> {
-    let trimmed = raw.trim();
-    if trimmed.len() != SHA256_HEX_LEN {
+    let value = raw.trim();
+    if value.len() != SHA256_HEX_LEN {
         bail!(
             "invalid bundle sha256 length: expected {}, got {}",
             SHA256_HEX_LEN,
-            trimmed.len()
+            value.len()
         );
     }
-    if !trimmed.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+
+    if !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         bail!("bundle sha256 must be lowercase/uppercase hex");
     }
-    Ok(trimmed.to_ascii_lowercase())
+
+    Ok(value.to_ascii_lowercase())
 }
 
 fn validated_bundle_relative_path(label: &str, raw: &str) -> Result<PathBuf> {
@@ -243,10 +257,12 @@ fn validated_bundle_relative_path(label: &str, raw: &str) -> Result<PathBuf> {
     if value.is_empty() {
         bail!("bundle field `{label}` must not be empty");
     }
+
     let path = PathBuf::from(value);
     if path.is_absolute() {
         bail!("bundle field `{label}` must be a relative path");
     }
+
     for component in path.components() {
         match component {
             Component::CurDir | Component::Normal(_) => {}
@@ -255,6 +271,7 @@ fn validated_bundle_relative_path(label: &str, raw: &str) -> Result<PathBuf> {
             }
         }
     }
+
     Ok(path)
 }
 
@@ -262,15 +279,19 @@ fn ensure_archive_entry_path_safe(path: &Path) -> Result<()> {
     if path.is_absolute() {
         bail!("archive entry path must be relative: {}", path.display());
     }
+
     for component in path.components() {
         match component {
             Component::CurDir | Component::Normal(_) => {}
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => bail!(
-                "archive entry path contains unsafe component: {}",
-                path.display()
-            ),
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                bail!(
+                    "archive entry path contains unsafe component: {}",
+                    path.display()
+                )
+            }
         }
     }
+
     Ok(())
 }
 
@@ -373,10 +394,12 @@ fn http_get_bytes(url: &Url) -> Result<Vec<u8>> {
         .timeout_global(Some(Duration::from_secs(30)))
         .build();
     let agent: ureq::Agent = config.into();
+
     let mut response = agent
         .get(url.as_str())
         .call()
         .map_err(|error| anyhow::anyhow!("http GET {} failed: {error}", url))?;
+
     response
         .body_mut()
         .read_to_vec()

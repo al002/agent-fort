@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use crate::command::{InstallState, StopArgs, daemon_pid_file_path, resolve_install_root};
+use crate::command::StopArgs;
+use crate::state::{InstallState, daemon_pid_file_path, resolve_install_root};
 
 #[derive(Debug, Serialize)]
 pub struct StopOutput {
@@ -125,11 +126,7 @@ fn terminate_daemon(pid: u32, _timeout: Duration) -> Result<bool> {
         .status()
         .context("run taskkill")?;
 
-    if status.success() {
-        return Ok(true);
-    }
-
-    Ok(false)
+    Ok(status.success())
 }
 
 fn cleanup_endpoint_socket(endpoint: &str) -> Result<()> {

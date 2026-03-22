@@ -1,28 +1,24 @@
 mod command;
 mod start;
+mod state;
 mod stop;
 mod sync;
 
 use command::{BootstrapCommand, Cli, ErrorOutput, ParseOutcome};
 
 fn main() {
-    let parsed = Cli::parse_from_env();
+    let parsed = match Cli::parse_from_env() {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            print_error_and_exit(error.to_string());
+        }
+    };
+
     let cli = match parsed {
-        Ok(ParseOutcome::Run(cli)) => cli,
-        Ok(ParseOutcome::Help(help)) => {
+        ParseOutcome::Run(cli) => cli,
+        ParseOutcome::Help(help) => {
             println!("{help}");
             return;
-        }
-        Err(error) => {
-            let output = ErrorOutput {
-                ok: false,
-                error: error.to_string(),
-            };
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&output).expect("serialize error output")
-            );
-            std::process::exit(1);
         }
     };
 
@@ -36,19 +32,16 @@ fn main() {
     };
 
     match result {
-        Ok(json) => {
-            println!("{json}");
-        }
-        Err(error) => {
-            let output = ErrorOutput {
-                ok: false,
-                error: error.to_string(),
-            };
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&output).expect("serialize error output")
-            );
-            std::process::exit(1);
-        }
+        Ok(json) => println!("{json}"),
+        Err(error) => print_error_and_exit(error.to_string()),
     }
+}
+
+fn print_error_and_exit(error: String) -> ! {
+    let output = ErrorOutput { ok: false, error };
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&output).expect("serialize error output")
+    );
+    std::process::exit(1);
 }

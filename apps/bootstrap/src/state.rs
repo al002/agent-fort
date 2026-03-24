@@ -18,7 +18,8 @@ pub struct InstallState {
     pub version: String,
     pub endpoint: String,
     pub daemon_path: PathBuf,
-    pub bwrap_path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bwrap_path: Option<PathBuf>,
     pub helper_path: PathBuf,
     pub bundle_sha256: String,
     pub manifest_source: String,

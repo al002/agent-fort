@@ -11,12 +11,16 @@ use anyhow::{Context, Result, bail};
 #[derive(Debug, Clone)]
 pub struct HelperClient {
     helper_path: PathBuf,
-    bwrap_path: PathBuf,
-    cgroup_root: PathBuf,
+    bwrap_path: Option<PathBuf>,
+    cgroup_root: Option<PathBuf>,
 }
 
 impl HelperClient {
-    pub fn new(helper_path: PathBuf, bwrap_path: PathBuf, cgroup_root: PathBuf) -> Self {
+    pub fn new(
+        helper_path: PathBuf,
+        bwrap_path: Option<PathBuf>,
+        cgroup_root: Option<PathBuf>,
+    ) -> Self {
         Self {
             helper_path,
             bwrap_path,
@@ -70,11 +74,14 @@ impl HelperClient {
     }
 
     fn spawn_helper_process(&self) -> Result<std::process::Child> {
-        Command::new(&self.helper_path)
-            .arg("--bwrap-path")
-            .arg(&self.bwrap_path)
-            .arg("--cgroup-root")
-            .arg(&self.cgroup_root)
+        let mut command = Command::new(&self.helper_path);
+        if let Some(path) = &self.bwrap_path {
+            command.arg("--bwrap-path").arg(path);
+        }
+        if let Some(path) = &self.cgroup_root {
+            command.arg("--cgroup-root").arg(path);
+        }
+        command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -104,8 +111,8 @@ mod tests {
         };
         let client = HelperClient::new(
             helper_bin,
-            PathBuf::from("/usr/bin/bwrap"),
-            PathBuf::from("/sys/fs/cgroup"),
+            Some(PathBuf::from("/usr/bin/bwrap")),
+            Some(PathBuf::from("/sys/fs/cgroup")),
         );
         let request = SandboxExecRequest {
             command: vec![

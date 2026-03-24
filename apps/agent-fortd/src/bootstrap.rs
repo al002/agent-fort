@@ -72,12 +72,17 @@ impl BootstrappedDaemon {
     }
 
     pub async fn run(self) -> Result<()> {
+        let bwrap_path = self
+            .config
+            .bwrap_path
+            .as_ref()
+            .map(|path| path.display().to_string());
         info!(
             daemon_instance_id = %self.config.daemon_instance_id,
             endpoint = %self.config.endpoint.as_uri(),
             store_path = %self.config.store_path.display(),
             helper_path = %self.config.helper_path.display(),
-            bwrap_path = %self.config.bwrap_path.display(),
+            bwrap_path = bwrap_path.as_deref().unwrap_or("<none>"),
             resource_governance_mode = ?self.config.resource_governance_mode,
             policy_dir = %self.config.policy_dir.display(),
             command_rules_dir = %self.config.command_rules_dir.display(),

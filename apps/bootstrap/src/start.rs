@@ -28,7 +28,7 @@ pub struct StartOutput {
 
 struct DaemonSpawnConfig<'a> {
     endpoint: &'a str,
-    bwrap_path: &'a Path,
+    bwrap_path: Option<&'a Path>,
     helper_path: &'a Path,
     policy_dir: &'a Path,
     command_rules_dir: &'a Path,
@@ -47,7 +47,7 @@ pub fn run(args: StartArgs) -> Result<StartOutput> {
     let helper_path = args
         .helper_path
         .unwrap_or_else(|| state.helper_path.clone());
-    let bwrap_path = resolve_bwrap_path(args.bwrap_path.as_deref(), &state.bwrap_path)?;
+    let bwrap_path = resolve_bwrap_path(args.bwrap_path.as_deref(), state.bwrap_path.as_deref())?;
 
     let policy_dir = resolve_dir_path(args.policy_dir, default_policy_dir)?;
     ensure_policy_exists(&policy_dir)?;
@@ -76,7 +76,7 @@ pub fn run(args: StartArgs) -> Result<StartOutput> {
         &daemon_path,
         DaemonSpawnConfig {
             endpoint: &endpoint,
-            bwrap_path: &bwrap_path,
+            bwrap_path: bwrap_path.as_deref(),
             helper_path: &helper_path,
             policy_dir: &policy_dir,
             command_rules_dir: &command_rules_dir,
@@ -223,8 +223,6 @@ fn spawn_daemon(daemon_path: &Path, config: DaemonSpawnConfig<'_>) -> Result<u32
     command
         .arg("--endpoint")
         .arg(config.endpoint)
-        .arg("--bwrap-path")
-        .arg(config.bwrap_path)
         .arg("--helper-path")
         .arg(config.helper_path)
         .arg("--policy-dir")
@@ -235,6 +233,9 @@ fn spawn_daemon(daemon_path: &Path, config: DaemonSpawnConfig<'_>) -> Result<u32
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
+    if let Some(bwrap_path) = config.bwrap_path {
+        command.arg("--bwrap-path").arg(bwrap_path);
+    }
     if let Some(strict) = config.command_rules_strict {
         command
             .arg("--command-rules-strict")
@@ -275,28 +276,41 @@ fn ensure_policy_exists(policy_dir: &Path) -> Result<()> {
     )
 }
 
-fn resolve_bwrap_path(explicit: Option<&Path>, bundled: &Path) -> Result<PathBuf> {
+fn resolve_bwrap_path(explicit: Option<&Path>, bundled: Option<&Path>) -> Result<Option<PathBuf>> {
     if let Some(path) = explicit {
         ensure_file(path, "bwrap binary")?;
-        return Ok(path.to_path_buf());
+        return Ok(Some(path.to_path_buf()));
     }
 
-    if bundled.is_file() {
-        return Ok(bundled.to_path_buf());
+    if let Some(path) = bundled
+        && path.is_file()
+    {
+        return Ok(Some(path.to_path_buf()));
     }
 
+    #[cfg(windows)]
+    {
+        return Ok(None);
+    }
+
+    #[cfg(not(windows))]
     let system_path = PathBuf::from(SYSTEM_BWRAP_PATH);
+    #[cfg(not(windows))]
     if system_path.is_file() {
-        return Ok(system_path);
+        return Ok(Some(system_path));
     }
 
+    #[cfg(not(windows))]
     if let Some(found) = find_executable_in_path("bwrap") {
-        return Ok(found);
+        return Ok(Some(found));
     }
 
+    #[cfg(not(windows))]
     bail!(
         "bwrap binary not found (tried bundle `{}`, system `{}`, PATH lookup)",
-        bundled.display(),
+        bundled
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "<none>".to_string()),
         SYSTEM_BWRAP_PATH
     )
 }

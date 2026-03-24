@@ -30,7 +30,8 @@ struct BundleSpec {
     #[serde(default = "default_bundle_format")]
     format: String,
     daemon_rel_path: String,
-    bwrap_rel_path: String,
+    #[serde(default)]
+    bwrap_rel_path: Option<String>,
     #[serde(default = "default_helper_rel_path")]
     helper_rel_path: String,
 }
@@ -40,7 +41,7 @@ pub struct SyncOutput {
     pub ok: bool,
     pub version: String,
     pub daemon_path: String,
-    pub bwrap_path: String,
+    pub bwrap_path: Option<String>,
     pub helper_path: String,
     pub endpoint: String,
     pub install_state_path: String,
@@ -80,17 +81,24 @@ pub fn run(args: SyncArgs) -> Result<SyncOutput> {
         "daemon_rel_path",
         &manifest.bundle.daemon_rel_path,
     )?);
-    let bwrap_path = extracted_root.join(validated_bundle_relative_path(
-        "bwrap_rel_path",
-        &manifest.bundle.bwrap_rel_path,
-    )?);
+    let bwrap_path = manifest
+        .bundle
+        .bwrap_rel_path
+        .as_deref()
+        .map(|path| {
+            validated_bundle_relative_path("bwrap_rel_path", path)
+                .map(|path| extracted_root.join(path))
+        })
+        .transpose()?;
     let helper_path = extracted_root.join(validated_bundle_relative_path(
         "helper_rel_path",
         &manifest.bundle.helper_rel_path,
     )?);
 
     ensure_file(&daemon_path, "daemon binary")?;
-    ensure_file(&bwrap_path, "bwrap binary")?;
+    if let Some(path) = &bwrap_path {
+        ensure_file(path, "bwrap binary")?;
+    }
     ensure_file(&helper_path, "helper binary")?;
 
     let endpoint = resolve_endpoint(args.endpoint, None);
@@ -110,7 +118,7 @@ pub fn run(args: SyncArgs) -> Result<SyncOutput> {
         ok: true,
         version: state.version,
         daemon_path: daemon_path.display().to_string(),
-        bwrap_path: bwrap_path.display().to_string(),
+        bwrap_path: bwrap_path.map(|path| path.display().to_string()),
         helper_path: helper_path.display().to_string(),
         endpoint,
         install_state_path: InstallState::file_path(&install_root).display().to_string(),

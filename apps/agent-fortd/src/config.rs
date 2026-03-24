@@ -5,7 +5,12 @@ use af_sandbox::ResourceGovernanceMode;
 use anyhow::{Context, Result, bail};
 use uuid::Uuid;
 
+#[cfg(windows)]
+const DEFAULT_DAEMON_ENDPOINT: &str = "npipe://agent-fortd";
+#[cfg(not(windows))]
 const DEFAULT_DAEMON_ENDPOINT: &str = "/tmp/agent-fortd.sock";
+
+#[cfg(not(windows))]
 const DEFAULT_BWRAP_PATH: &str = "/usr/bin/bwrap";
 
 #[cfg(windows)]
@@ -18,8 +23,8 @@ pub struct DaemonConfig {
     pub endpoint: Endpoint,
     pub daemon_instance_id: String,
     pub helper_path: PathBuf,
-    pub bwrap_path: PathBuf,
-    pub cgroup_root: PathBuf,
+    pub bwrap_path: Option<PathBuf>,
+    pub cgroup_root: Option<PathBuf>,
     pub store_path: PathBuf,
     pub policy_dir: PathBuf,
     pub command_rules_dir: PathBuf,
@@ -108,12 +113,8 @@ impl DaemonConfig {
             .daemon_instance_id
             .unwrap_or_else(|| Uuid::new_v4().to_string());
         let helper_path = raw.helper_path.unwrap_or_else(default_helper_path);
-        let bwrap_path = raw
-            .bwrap_path
-            .unwrap_or_else(|| PathBuf::from(DEFAULT_BWRAP_PATH));
-        let cgroup_root = raw
-            .cgroup_root
-            .unwrap_or_else(|| PathBuf::from("/sys/fs/cgroup"));
+        let bwrap_path = raw.bwrap_path.or_else(default_bwrap_path);
+        let cgroup_root = raw.cgroup_root.or_else(default_cgroup_root);
         let store_path = raw.store_path.unwrap_or_else(default_store_path);
         let policy_dir = resolve_dir_path(raw.policy_dir.unwrap_or_else(default_policy_dir))?;
         ensure_policy_exists(&policy_dir)?;
@@ -175,6 +176,26 @@ fn default_helper_path() -> PathBuf {
     std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("/"))
         .join(DEFAULT_HELPER_FILE)
+}
+
+#[cfg(windows)]
+fn default_bwrap_path() -> Option<PathBuf> {
+    None
+}
+
+#[cfg(not(windows))]
+fn default_bwrap_path() -> Option<PathBuf> {
+    Some(PathBuf::from(DEFAULT_BWRAP_PATH))
+}
+
+#[cfg(windows)]
+fn default_cgroup_root() -> Option<PathBuf> {
+    None
+}
+
+#[cfg(not(windows))]
+fn default_cgroup_root() -> Option<PathBuf> {
+    Some(PathBuf::from("/sys/fs/cgroup"))
 }
 
 fn resolve_dir_path(path: PathBuf) -> Result<PathBuf> {
@@ -274,6 +295,9 @@ mod tests {
     #[test]
     fn parses_default_endpoint() {
         let endpoint = Endpoint::parse(DEFAULT_DAEMON_ENDPOINT).expect("default endpoint is valid");
+        #[cfg(windows)]
+        assert_eq!(endpoint.as_uri(), "npipe://\\\\.\\pipe\\agent-fortd");
+        #[cfg(not(windows))]
         assert_eq!(endpoint.as_uri(), "unix:///tmp/agent-fortd.sock");
     }
 

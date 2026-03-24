@@ -125,8 +125,8 @@ pub struct BootstrapSyncOutput {
     pub version: String,
     /// Installed daemon executable path.
     pub daemon_path: String,
-    /// Installed bubblewrap executable path.
-    pub bwrap_path: String,
+    /// Installed runtime launcher asset path when the bundle includes one.
+    pub bwrap_path: Option<String>,
     /// Installed helper executable path.
     pub helper_path: String,
     /// Endpoint configured for daemon runtime.

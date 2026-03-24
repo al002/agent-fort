@@ -389,7 +389,8 @@ struct BootstrapSyncBundle {
     sha256: String,
     format: String,
     daemon_rel_path: String,
-    bwrap_rel_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bwrap_rel_path: Option<String>,
     helper_rel_path: String,
 }
 
@@ -431,16 +432,23 @@ fn build_runtime_bundle(args: &[String]) -> Result<()> {
     let daemon_binary = binary_output_path(&root, profile, "agent-fortd");
     let bwrap_binary = parsed
         .bwrap_path
-        .unwrap_or_else(|| bwrap_output_binary(&root, &target));
+        .or_else(|| target_requires_bwrap(&target).then(|| bwrap_output_binary(&root, &target)));
     let helper_binary = parsed
         .helper_path
         .unwrap_or_else(|| binary_output_path(&root, profile, "af-helper"));
 
     ensure_packaging_input(&daemon_binary, "agent-fortd binary")?;
-    ensure_packaging_input(&bwrap_binary, "bwrap binary")?;
+    if let Some(path) = &bwrap_binary {
+        ensure_packaging_input(path, "bwrap binary")?;
+    }
     ensure_packaging_input(&helper_binary, "agent-fort-helper binary")?;
 
-    create_runtime_bundle_archive(&bundle_path, &daemon_binary, &bwrap_binary, &helper_binary)?;
+    create_runtime_bundle_archive(
+        &bundle_path,
+        &daemon_binary,
+        bwrap_binary.as_deref(),
+        &helper_binary,
+    )?;
     let bundle_sha256 = sha256_hex_file(&bundle_path)?;
 
     let manifest = BootstrapSyncManifest {
@@ -450,7 +458,9 @@ fn build_runtime_bundle(args: &[String]) -> Result<()> {
             sha256: bundle_sha256.clone(),
             format: "tar.gz".to_string(),
             daemon_rel_path: RUNTIME_DAEMON_ENTRY.to_string(),
-            bwrap_rel_path: RUNTIME_BWRAP_ENTRY.to_string(),
+            bwrap_rel_path: bwrap_binary
+                .as_ref()
+                .map(|_| RUNTIME_BWRAP_ENTRY.to_string()),
             helper_rel_path: RUNTIME_HELPER_ENTRY.to_string(),
         },
     };
@@ -656,7 +666,7 @@ fn ensure_packaging_input(path: &Path, label: &str) -> Result<()> {
 fn create_runtime_bundle_archive(
     bundle_path: &Path,
     daemon_binary: &Path,
-    bwrap_binary: &Path,
+    bwrap_binary: Option<&Path>,
     helper_binary: &Path,
 ) -> Result<()> {
     let file = File::create(bundle_path)
@@ -666,7 +676,9 @@ fn create_runtime_bundle_archive(
     let mut archive = Builder::new(encoder);
 
     append_bundle_entry(&mut archive, daemon_binary, RUNTIME_DAEMON_ENTRY)?;
-    append_bundle_entry(&mut archive, bwrap_binary, RUNTIME_BWRAP_ENTRY)?;
+    if let Some(bwrap_binary) = bwrap_binary {
+        append_bundle_entry(&mut archive, bwrap_binary, RUNTIME_BWRAP_ENTRY)?;
+    }
     append_bundle_entry(&mut archive, helper_binary, RUNTIME_HELPER_ENTRY)?;
 
     archive
@@ -966,6 +978,10 @@ fn has_flag(args: &[String], key: &str) -> bool {
 
 fn machine_target_label() -> String {
     format!("{}-{}", env::consts::OS, env::consts::ARCH)
+}
+
+fn target_requires_bwrap(target: &str) -> bool {
+    target.starts_with("linux-")
 }
 
 fn bwrap_output_dir(repo_root: &Path, target: &str) -> PathBuf {

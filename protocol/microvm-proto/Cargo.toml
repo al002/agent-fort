@@ -1,0 +1,13 @@
+[package]
+name = "af-microvm-proto"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[dependencies]
+prost = { workspace = true }
+prost-types = { workspace = true }
+
+[build-dependencies]
+prost-build = "0.14"
+protoc-bin-vendored = "3.1"

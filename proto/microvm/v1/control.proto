@@ -1,0 +1,94 @@
+syntax = "proto3";
+
+package agent.fort.microvm.v1;
+
+message MicrovmHealthRequest {}
+
+message MicrovmHealthResponse {
+  bool ok = 1;
+  optional string error_code = 2;
+  optional string error_message = 3;
+}
+
+message MicrovmLimits {
+  uint64 cpu_ms = 1;
+  uint64 memory_mb = 2;
+  uint32 pids = 3;
+  uint64 disk_mb = 4;
+  uint64 timeout_ms = 5;
+}
+
+message TraceMeta {
+  optional string trace_id = 1;
+  optional string client_instance_id = 2;
+}
+
+message MicrovmExecuteRequest {
+  string request_id = 1;
+  string profile_id = 2;
+  repeated string command = 3;
+  string cwd = 4;
+  map<string, string> env = 5;
+  optional string stdin = 6;
+  MicrovmLimits limits = 7;
+  TraceMeta trace = 8;
+}
+
+enum MicrovmExitStatus {
+  MICROVM_EXIT_STATUS_UNSPECIFIED = 0;
+  MICROVM_EXIT_STATUS_SUCCEEDED = 1;
+  MICROVM_EXIT_STATUS_FAILED = 2;
+  MICROVM_EXIT_STATUS_TIMED_OUT = 3;
+  MICROVM_EXIT_STATUS_CANCELLED = 4;
+}
+
+message MicrovmMetrics {
+  uint64 queue_wait_ms = 1;
+  uint64 boot_ms = 2;
+  uint64 exec_ms = 3;
+}
+
+message MicrovmExecResult {
+  MicrovmExitStatus status = 1;
+  optional int32 exit_code = 2;
+  bool timed_out = 3;
+  string stdout = 4;
+  string stderr = 5;
+  bool stdout_truncated = 6;
+  bool stderr_truncated = 7;
+  string vm_id = 8;
+  string lease_source = 9;
+  MicrovmMetrics metrics = 10;
+}
+
+enum MicrovmErrorCode {
+  MICROVM_ERROR_CODE_UNSPECIFIED = 0;
+  MICROVM_ERROR_CODE_QUEUE_TIMEOUT = 1;
+  MICROVM_ERROR_CODE_POOL_EXHAUSTED = 2;
+  MICROVM_ERROR_CODE_VM_BOOT_FAILED = 3;
+  MICROVM_ERROR_CODE_VM_RESTORE_FAILED = 4;
+  MICROVM_ERROR_CODE_GUEST_CHANNEL_FAILED = 5;
+  MICROVM_ERROR_CODE_EXEC_TIMEOUT = 6;
+  MICROVM_ERROR_CODE_EXEC_FAILED = 7;
+  MICROVM_ERROR_CODE_BACKEND_UNAVAILABLE = 8;
+}
+
+message MicrovmExecError {
+  MicrovmErrorCode code = 1;
+  string message = 2;
+}
+
+message MicrovmExecuteResponse {
+  bool ok = 1;
+  optional MicrovmExecResult result = 2;
+  optional MicrovmExecError error = 3;
+}
+
+message MicrovmWarmupRequest {
+  string profile_id = 1;
+}
+
+message MicrovmWarmupResponse {
+  bool ok = 1;
+  optional MicrovmExecError error = 2;
+}

@@ -42,11 +42,16 @@ pub struct SandboxRuntimePlan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MicrovmRuntimePlan {
     pub profile_id: String,
+    pub mode: String,
+    pub max_total: u32,
+    pub min_idle: u32,
+    pub warmup_on_start: bool,
+    pub queue_limit: u32,
+    pub queue_timeout_ms: u64,
     pub snapshot_enabled: bool,
-    pub vsock_policy: String,
-    pub allowed_shares: Vec<String>,
+    pub vcpu_count: u8,
+    pub memory_mib: u32,
     pub allowed_network: Vec<NetEndpoint>,
-    pub network_mode: String,
     pub limits: BackendResourceLimits,
 }
 

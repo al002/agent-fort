@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use af_policy::{BackendProfile, RuntimeBackend, StaticPolicy};
+use af_policy::{BackendProfile, MicrovmProfile, RuntimeBackend, StaticPolicy};
 
 use crate::{PolicyInfraError, PolicyInfraResult};
 
@@ -108,6 +108,110 @@ fn validate_policy(policy: &StaticPolicy, path: &str) -> PolicyInfraResult<()> {
                 message: format!("profile type mismatch for backend `{}`", backend.as_str()),
             });
         }
+
+        if let BackendProfile::Microvm(profile) = profile {
+            validate_microvm_profile(profile, path)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_microvm_profile(profile: &MicrovmProfile, path: &str) -> PolicyInfraResult<()> {
+    let mode = profile.mode.trim().to_ascii_lowercase();
+    if mode != "task" && mode != "resident" {
+        return Err(PolicyInfraError::InvalidPolicy {
+            path: path.to_string(),
+            message: format!(
+                "microvm profile `{}` has invalid mode `{}`",
+                profile.profile_id, profile.mode
+            ),
+        });
+    }
+
+    if profile.max_total == 0 {
+        return Err(PolicyInfraError::InvalidPolicy {
+            path: path.to_string(),
+            message: format!(
+                "microvm profile `{}` must set max_total >= 1",
+                profile.profile_id
+            ),
+        });
+    }
+
+    if profile.queue_limit == 0 {
+        return Err(PolicyInfraError::InvalidPolicy {
+            path: path.to_string(),
+            message: format!(
+                "microvm profile `{}` must set queue_limit >= 1",
+                profile.profile_id
+            ),
+        });
+    }
+
+    if profile.queue_timeout_ms == 0 {
+        return Err(PolicyInfraError::InvalidPolicy {
+            path: path.to_string(),
+            message: format!(
+                "microvm profile `{}` must set queue_timeout_ms >= 1",
+                profile.profile_id
+            ),
+        });
+    }
+
+    if profile.vcpu_count == 0 {
+        return Err(PolicyInfraError::InvalidPolicy {
+            path: path.to_string(),
+            message: format!(
+                "microvm profile `{}` must set vcpu_count >= 1",
+                profile.profile_id
+            ),
+        });
+    }
+
+    if profile.memory_mib == 0 {
+        return Err(PolicyInfraError::InvalidPolicy {
+            path: path.to_string(),
+            message: format!(
+                "microvm profile `{}` must set memory_mib >= 1",
+                profile.profile_id
+            ),
+        });
+    }
+
+    match mode.as_str() {
+        "task" => {
+            if profile.min_idle != 0 {
+                return Err(PolicyInfraError::InvalidPolicy {
+                    path: path.to_string(),
+                    message: format!(
+                        "microvm profile `{}` in task mode must set min_idle = 0",
+                        profile.profile_id
+                    ),
+                });
+            }
+            if profile.snapshot_enabled {
+                return Err(PolicyInfraError::InvalidPolicy {
+                    path: path.to_string(),
+                    message: format!(
+                        "microvm profile `{}` in task mode cannot enable snapshot",
+                        profile.profile_id
+                    ),
+                });
+            }
+        }
+        "resident" => {
+            if profile.min_idle == 0 || profile.min_idle > profile.max_total {
+                return Err(PolicyInfraError::InvalidPolicy {
+                    path: path.to_string(),
+                    message: format!(
+                        "microvm profile `{}` in resident mode requires 1 <= min_idle <= max_total",
+                        profile.profile_id
+                    ),
+                });
+            }
+        }
+        _ => {}
     }
 
     Ok(())
@@ -195,5 +299,117 @@ backends:
         disk_mb: 256
         timeout_ms: 60000
 "#
+    }
+
+    #[test]
+    fn rejects_invalid_microvm_profile_mode() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let root = temp_dir.path().join("policies");
+        fs::create_dir_all(&root).expect("create policy dir");
+        fs::write(
+            root.join("static_policy.yaml"),
+            microvm_policy_yaml("weird", 0, false, false),
+        )
+        .expect("write static policy");
+
+        let error = StaticPolicyParser
+            .parse(&root)
+            .expect_err("invalid microvm mode should fail");
+
+        assert!(matches!(error, PolicyInfraError::InvalidPolicy { .. }));
+    }
+
+    #[test]
+    fn rejects_task_mode_with_min_idle() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let root = temp_dir.path().join("policies");
+        fs::create_dir_all(&root).expect("create policy dir");
+        fs::write(
+            root.join("static_policy.yaml"),
+            microvm_policy_yaml("task", 1, false, false),
+        )
+        .expect("write static policy");
+
+        let error = StaticPolicyParser
+            .parse(&root)
+            .expect_err("task mode with min idle should fail");
+
+        assert!(matches!(error, PolicyInfraError::InvalidPolicy { .. }));
+    }
+
+    #[test]
+    fn parses_valid_microvm_profile() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let root = temp_dir.path().join("policies");
+        fs::create_dir_all(&root).expect("create policy dir");
+        fs::write(
+            root.join("static_policy.yaml"),
+            microvm_policy_yaml("resident", 1, true, true),
+        )
+        .expect("write static policy");
+
+        let loaded = StaticPolicyParser
+            .parse(&root)
+            .expect("parse static policy");
+
+        assert_eq!(
+            loaded.policy.backends.backend_order,
+            vec![RuntimeBackend::Microvm]
+        );
+    }
+
+    fn microvm_policy_yaml(
+        mode: &str,
+        min_idle: u32,
+        warmup_on_start: bool,
+        snapshot_enabled: bool,
+    ) -> String {
+        format!(
+            r#"
+version: 1
+revision: 9
+default_action: deny
+capabilities:
+  fs_read: ["/work/**"]
+  fs_write: ["/work/**"]
+  fs_delete: ["/work/**"]
+  net_connect: []
+  allow_host_exec: false
+  allow_process_control: false
+  allow_privilege: false
+  allow_credential_access: false
+backends:
+  backend_order: ["microvm"]
+  capability_limits:
+    microvm:
+      fs_read: ["/work/**"]
+      fs_write: []
+      fs_delete: []
+      net_connect: []
+      allow_host_exec: false
+      allow_process_control: false
+      allow_privilege: false
+      allow_credential_access: false
+  profiles:
+    microvm:
+      type: microvm
+      profile_id: "microvm-default"
+      mode: "{mode}"
+      max_total: 1
+      min_idle: {min_idle}
+      warmup_on_start: {warmup_on_start}
+      queue_limit: 16
+      queue_timeout_ms: 30000
+      snapshot_enabled: {snapshot_enabled}
+      vcpu_count: 1
+      memory_mib: 256
+      limits:
+        cpu_ms: 1000
+        memory_mb: 256
+        pids: 64
+        disk_mb: 256
+        timeout_ms: 60000
+"#
+        )
     }
 }

@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package agent.fort.microvm.v1;
+
+enum GuestExitStatus {
+  GUEST_EXIT_STATUS_UNSPECIFIED = 0;
+  GUEST_EXIT_STATUS_SUCCEEDED = 1;
+  GUEST_EXIT_STATUS_FAILED = 2;
+  GUEST_EXIT_STATUS_TIMED_OUT = 3;
+  GUEST_EXIT_STATUS_CANCELLED = 4;
+}
+
+message GuestExecRequest {
+  repeated string command = 1;
+  string cwd = 2;
+  map<string, string> env = 3;
+  optional string stdin = 4;
+  uint64 timeout_ms = 5;
+  uint64 stdout_max_bytes = 6;
+  uint64 stderr_max_bytes = 7;
+}
+
+message GuestExecResponse {
+  GuestExitStatus status = 1;
+  optional int32 exit_code = 2;
+  bool timed_out = 3;
+  string stdout = 4;
+  string stderr = 5;
+  bool stdout_truncated = 6;
+  bool stderr_truncated = 7;
+}

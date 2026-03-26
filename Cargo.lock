@@ -83,6 +83,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "af-guest-runner"
+version = "0.1.0"
+
+[[package]]
 name = "af-helper"
 version = "0.1.0"
 dependencies = [
@@ -99,6 +103,20 @@ dependencies = [
  "af-sandbox",
  "libc",
 ]
+
+[[package]]
+name = "af-microvm-proto"
+version = "0.1.0"
+dependencies = [
+ "prost",
+ "prost-build",
+ "prost-types",
+ "protoc-bin-vendored",
+]
+
+[[package]]
+name = "af-microvmd"
+version = "0.1.0"
 
 [[package]]
 name = "af-policy"

@@ -4,9 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-af-linux-microvm = { path = "../../infra/linux-microvm" }
 af-microvm = { path = "../../infra/microvm" }
 anyhow = { workspace = true }
-libc = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+af-linux-microvm = { path = "../../infra/linux-microvm" }
+libc = { workspace = true }

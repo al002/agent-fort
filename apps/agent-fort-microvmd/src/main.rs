@@ -1,19 +1,33 @@
+#[cfg(unix)]
 mod config;
+#[cfg(unix)]
 mod runtime;
+#[cfg(unix)]
 mod server;
 
 use anyhow::Result;
 use tracing_subscriber::EnvFilter;
 
+#[cfg(unix)]
 use crate::config::Config;
+#[cfg(unix)]
 use crate::runtime::LocalRuntime;
+#[cfg(unix)]
 use crate::server::Server;
 
+#[cfg(unix)]
 fn main() -> Result<()> {
     init_tracing();
     run()
 }
 
+#[cfg(not(unix))]
+fn main() -> Result<()> {
+    init_tracing();
+    anyhow::bail!("af-microvmd is only supported on Unix targets")
+}
+
+#[cfg(unix)]
 fn run() -> Result<()> {
     let config = Config::load()?;
     let runtime = LocalRuntime::new(config.clone())?;

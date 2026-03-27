@@ -1,0 +1,8 @@
+[package]
+name = "af-linux-microvm"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+af-microvm = { path = "../microvm" }
+anyhow = { workspace = true }

@@ -2,6 +2,22 @@ syntax = "proto3";
 
 package agent.fort.microvm.v1;
 
+message MicrovmControlRequest {
+  oneof kind {
+    MicrovmExecuteRequest execute = 1;
+    MicrovmWarmupRequest warmup = 2;
+    MicrovmHealthRequest health = 3;
+  }
+}
+
+message MicrovmControlResponse {
+  oneof kind {
+    MicrovmExecuteResponse execute = 1;
+    MicrovmWarmupResponse warmup = 2;
+    MicrovmHealthResponse health = 3;
+  }
+}
+
 message MicrovmHealthRequest {}
 
 message MicrovmHealthResponse {

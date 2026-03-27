@@ -97,11 +97,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "af-linux-microvm"
+version = "0.1.0"
+dependencies = [
+ "af-microvm",
+ "anyhow",
+]
+
+[[package]]
 name = "af-linux-sandbox"
 version = "0.1.0"
 dependencies = [
  "af-sandbox",
  "libc",
+]
+
+[[package]]
+name = "af-microvm"
+version = "0.1.0"
+dependencies = [
+ "af-microvm-proto",
+ "prost",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -117,6 +134,14 @@ dependencies = [
 [[package]]
 name = "af-microvmd"
 version = "0.1.0"
+dependencies = [
+ "af-linux-microvm",
+ "af-microvm",
+ "anyhow",
+ "libc",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "af-policy"
